@@ -8,8 +8,51 @@ from .codebuff import FreebuffSession
 from .models import resolve_model
 
 
+_UPSTREAM_CHAT_KEYS = frozenset(
+    {
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "metadata",
+        "modalities",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "service_tier",
+        "stop",
+        "store",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_logprobs",
+        "top_p",
+        "user",
+    }
+)
+
+
 def model_id(requested: str | None = None) -> str:
     return resolve_model(requested).upstream_id
+
+
+def normalize_chat_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+
+    normalized = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        item = dict(message)
+        if item.get("role") == "developer":
+            item["role"] = "system"
+        normalized.append(item)
+    return normalized
 
 
 def build_upstream_payload(
@@ -21,26 +64,24 @@ def build_upstream_payload(
     trace_session_id: str | None = None,
     upstream_model_id: str | None = None,
 ) -> dict[str, Any]:
-    payload = dict(body)
-    payload["model"] = upstream_model_id or model_id(payload.get("model"))
+    payload = {
+        key: body[key]
+        for key in _UPSTREAM_CHAT_KEYS
+        if key in body and body[key] is not None
+    }
+    payload["model"] = upstream_model_id or model_id(body.get("model"))
+    payload["messages"] = normalize_chat_messages(body.get("messages"))
     payload["stream"] = True
     payload.setdefault("stop", ['"cb_easp"'])
 
-    provider = dict(payload.get("provider") or {})
-    provider["data_collection"] = "deny"
-    payload["provider"] = provider
-
-    metadata = dict(payload.get("codebuff_metadata") or {})
-    metadata.update(
-        {
-            "freebuff_instance_id": session.instance_id,
-            "trace_session_id": trace_session_id or str(uuid.uuid4()),
-            "run_id": run_id,
-            "client_id": client_id,
-            "cost_mode": "free",
-        }
-    )
-    payload["codebuff_metadata"] = metadata
+    payload["provider"] = {"data_collection": "deny"}
+    payload["codebuff_metadata"] = {
+        "freebuff_instance_id": session.instance_id,
+        "trace_session_id": trace_session_id or str(uuid.uuid4()),
+        "run_id": run_id,
+        "client_id": client_id,
+        "cost_mode": "free",
+    }
     return payload
 
 

@@ -780,11 +780,17 @@ def _upstream_error(
 def _ad_messages(messages: list[dict[str, Any]] | None) -> list[dict[str, str]]:
     return [
         {
-            "role": str(message.get("role") or "user"),
+            "role": _ad_message_role(message.get("role")),
             "content": _ad_message_content(message.get("content")),
         }
         for message in messages or []
     ]
+
+
+def _ad_message_role(role: Any) -> str:
+    if role == "developer":
+        return "system"
+    return str(role or "user")
 
 
 def _ad_message_content(content: Any) -> str:

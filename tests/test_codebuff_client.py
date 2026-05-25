@@ -140,6 +140,22 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(messages[0]["content"], list)
 
+    async def test_request_ads_maps_developer_role_to_system(self) -> None:
+        client = CapturingAdsClient()
+
+        try:
+            await client.request_ads(
+                "gravity",
+                messages=[{"role": "developer", "content": "be helpful"}],
+            )
+        finally:
+            await client.aclose()
+
+        self.assertEqual(
+            client.body["messages"],
+            [{"role": "system", "content": "be helpful"}],
+        )
+
     async def test_request_ad_chain_does_not_block_when_all_providers_fail(self) -> None:
         client = FailingAdsClient()
 

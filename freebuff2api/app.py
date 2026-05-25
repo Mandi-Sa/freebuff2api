@@ -23,6 +23,7 @@ from .logging_config import configure_logging, redact_headers, render_debug
 from .openai_compat import (
     CompletionAccumulator,
     build_upstream_payload,
+    normalize_chat_messages,
     sanitize_stream_chunk,
 )
 from .models import CONTEXT_PRUNER_AGENT_ID, FreebuffModel, models_response, resolve_model
@@ -129,19 +130,20 @@ async def chat_completions(request: Request) -> Any:
             render_debug(body, settings.log_body_chars),
         )
 
+    messages = normalize_chat_messages(body.get("messages"))
     lease: CodebuffAccountLease | None = None
     try:
         lease = await _accounts(request).acquire_session(
             model_config.session_id,
-            messages=body.get("messages"),
+            messages=messages,
         )
         client = lease.client
         await client.validate_agents()
-        await client.request_ad_chain(messages=body.get("messages"))
+        await client.request_ad_chain(messages=messages)
         run = await _start_freebuff_run_chain(client, model_config)
         trace_session_id = str(uuid.uuid4())
         payload = build_upstream_payload(
-            body,
+            {**body, "messages": messages},
             session=lease.session,
             run_id=run.payload_run_id,
             client_id=settings.client_id,

@@ -116,6 +116,55 @@ class OpenAICompatTests(unittest.TestCase):
 
         self.assertEqual(payload["model"], "google/gemini-3.1-flash-lite-preview")
 
+    def test_build_upstream_payload_maps_developer_role_to_system(self) -> None:
+        body = {
+            "model": "deepseek/deepseek-v4-pro",
+            "messages": [
+                {"role": "developer", "content": "be helpful"},
+                {"role": "user", "content": "hello"},
+            ],
+            "temperature": 0.2,
+        }
+
+        payload = build_upstream_payload(
+            body,
+            session=FreebuffSession(
+                instance_id="instance-1",
+                model="deepseek/deepseek-v4-pro",
+            ),
+            run_id="run-1",
+            client_id="client-1",
+            trace_session_id="trace-1",
+        )
+
+        self.assertEqual(payload["messages"][0]["role"], "system")
+        self.assertEqual(payload["messages"][1]["role"], "user")
+        self.assertEqual(body["messages"][0]["role"], "developer")
+
+    def test_build_upstream_payload_filters_unknown_request_fields(self) -> None:
+        payload = build_upstream_payload(
+            {
+                "model": "deepseek/deepseek-v4-pro",
+                "messages": [],
+                "temperature": 0.2,
+                "provider": {"data_collection": "allow"},
+                "codebuff_metadata": {"cost_mode": "paid"},
+                "unexpected": "client-owned",
+            },
+            session=FreebuffSession(
+                instance_id="instance-1",
+                model="deepseek/deepseek-v4-pro",
+            ),
+            run_id="run-1",
+            client_id="client-1",
+            trace_session_id="trace-1",
+        )
+
+        self.assertEqual(payload["temperature"], 0.2)
+        self.assertNotIn("unexpected", payload)
+        self.assertEqual(payload["provider"], {"data_collection": "deny"})
+        self.assertEqual(payload["codebuff_metadata"]["cost_mode"], "free")
+
     def test_accumulator_keeps_reasoning_content_separate(self) -> None:
         accumulator = CompletionAccumulator("deepseek/deepseek-v4-flash")
 
