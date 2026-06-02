@@ -198,6 +198,39 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("network error", str(ctx.exception))
         self.assertIn("ConnectError", str(ctx.exception))
 
+    async def test_json_preserves_upstream_rate_limit_status(self) -> None:
+        def rate_limited(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                429,
+                json={
+                    "status": "rate_limited",
+                    "retryAfterMs": 53_041_966,
+                },
+            )
+
+        client = CodebuffClient(
+            Settings(
+                codebuff_token="token",
+                local_api_key=None,
+                request_timeout=1,
+            )
+        )
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(rate_limited),
+            timeout=1,
+        )
+
+        try:
+            with self.assertRaises(CodebuffError) as ctx:
+                await client.get_session()
+        finally:
+            await client.aclose()
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertIn("429", str(ctx.exception))
+        self.assertIn("rate_limited", str(ctx.exception))
+
     async def test_json_explains_session_model_mismatch_as_region_limit(self) -> None:
         def session_model_mismatch(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -232,6 +265,33 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("当前 IP/区域", str(ctx.exception))
         self.assertIn("US", str(ctx.exception))
+
+    async def test_chat_stream_preserves_upstream_unavailable_status(self) -> None:
+        def unavailable(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, text="service unavailable")
+
+        client = CodebuffClient(
+            Settings(
+                codebuff_token="token",
+                local_api_key=None,
+                request_timeout=1,
+            )
+        )
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(unavailable),
+            timeout=1,
+        )
+
+        try:
+            with self.assertRaises(CodebuffError) as ctx:
+                async for _ in client.chat_events({"messages": []}):
+                    pass
+        finally:
+            await client.aclose()
+
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertIn("Codebuff chat failed: 503", str(ctx.exception))
 
     async def test_chat_stream_explains_session_model_mismatch_as_region_limit(self) -> None:
         def session_model_mismatch(request: httpx.Request) -> httpx.Response:

@@ -773,7 +773,7 @@ def _upstream_error(
 
     return CodebuffError(
         f"{prefix}: {response.status_code} {text}",
-        502,
+        response.status_code,
     )
 
 

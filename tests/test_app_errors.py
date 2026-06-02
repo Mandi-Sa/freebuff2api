@@ -22,12 +22,12 @@ class FinalizeFailingClient:
 
 
 class AppErrorTests(unittest.TestCase):
-    def test_codebuff_error_returns_openai_style_json_response(self) -> None:
-        response = _error_response(CodebuffError("network error", 502))
+    def test_codebuff_error_returns_original_status_code(self) -> None:
+        response = _error_response(CodebuffError("rate limited", 429))
         body = json.loads(response.body)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(body["error"]["message"], "network error")
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(body["error"]["message"], "rate limited")
         self.assertEqual(body["error"]["type"], "upstream_error")
 
     def test_finalize_codebuff_error_logs_warning_without_raising(self) -> None:
