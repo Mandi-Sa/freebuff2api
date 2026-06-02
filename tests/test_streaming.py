@@ -3,7 +3,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from freebuff2api.app import _start_freebuff_run_chain, _stream_openai_chunks
+from freebuff2api.app import PreparedChatAttempt, _start_freebuff_run_chain, _stream_openai_chunks
 from freebuff2api.codebuff import CodebuffError, FreebuffRun
 from freebuff2api.config import Settings
 from freebuff2api.models import resolve_model
@@ -14,6 +14,13 @@ class FakeClient:
         self.recorded = False
         self.finished = False
         self.calls = []
+        self.settings = Settings(
+            codebuff_token="token-1",
+            local_api_key=None,
+            token_index=1,
+            client_id="client-1",
+            debug=False,
+        )
 
     async def chat_events(self, payload):
         yield (
@@ -43,8 +50,82 @@ class FakeClient:
 
 class FailingStreamClient(FakeClient):
     async def chat_events(self, payload):
-        raise CodebuffError("Codebuff chat failed: 403 hierarchy", 502)
+        raise CodebuffError(
+            "Codebuff chat failed: 403 hierarchy",
+            502,
+            token_index=self.settings.token_index,
+            token_hint=self.settings.token_hint,
+        )
         yield
+
+
+class RetryStreamClient(FakeClient):
+    def __init__(self, token_index: int, *, fail_chat: bool) -> None:
+        super().__init__()
+        self.settings = Settings(
+            codebuff_token=f"token-{token_index}",
+            local_api_key=None,
+            token_index=token_index,
+            client_id=f"client-{token_index}",
+            debug=False,
+        )
+        self.fail_chat = fail_chat
+
+    async def validate_agents(self) -> None:
+        return None
+
+    async def request_ad_chain(self, messages=None, surface=None) -> None:
+        return None
+
+    async def start_run(self, agent_id, ancestor_run_ids=None):
+        return f"run-{self.settings.token_index}-{agent_id}"
+
+    async def chat_events(self, payload):
+        if self.fail_chat:
+            raise CodebuffError(
+                "Codebuff chat failed: 429 rate_limited",
+                429,
+                token_index=self.settings.token_index,
+                token_hint=self.settings.token_hint,
+            )
+        yield (
+            'data: {"id":"chunk-ok","object":"chat.completion.chunk",'
+            '"created":1,"model":"deepseek/deepseek-v4-flash",'
+            '"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}'
+        )
+        yield "data: [DONE]"
+
+
+class FakeLease:
+    def __init__(self, client, account_index: int) -> None:
+        self.client = client
+        self.session = SimpleNamespace(instance_id=f"session-{account_index}")
+        self._account_index = account_index
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    @property
+    def account_index(self) -> int:
+        return self._account_index
+
+
+class RetryAccounts:
+    def __init__(self, leases) -> None:
+        self.leases = leases
+        self.account_count = len(leases)
+        self.calls = []
+
+    async def acquire_session(self, model: str, messages=None, *, exclude_account_indices=None):
+        excluded = set(exclude_account_indices or set())
+        self.calls.append((model, tuple(sorted(excluded))))
+        for lease in self.leases:
+            if lease.account_index in excluded:
+                continue
+            if not lease.closed:
+                return lease
+        raise CodebuffError("No remaining accounts available for retry", 503)
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
@@ -53,6 +134,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(
             app=SimpleNamespace(
                 state=SimpleNamespace(
+                    accounts=SimpleNamespace(account_count=1),
                     codebuff=client,
                     settings=Settings(
                         codebuff_token="token",
@@ -63,13 +145,26 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        chunks = []
-        run = FreebuffRun(
-            run_id="run-1",
-            agent_id="base2-free-deepseek-flash",
-            started_at="2026-05-23T00:00:00.000Z",
+        prepared = PreparedChatAttempt(
+            lease=FakeLease(client, 0),
+            run=FreebuffRun(
+                run_id="run-1",
+                agent_id="base2-free-deepseek-flash",
+                started_at="2026-05-23T00:00:00.000Z",
+            ),
+            payload={},
         )
-        async for chunk in _stream_openai_chunks(request, {}, run):
+
+        chunks = []
+        async for chunk in _stream_openai_chunks(
+            request,
+            {"model": "deepseek/deepseek-v4-flash", "messages": []},
+            [],
+            resolve_model("deepseek/deepseek-v4-flash"),
+            prepared_attempt=prepared,
+            attempt_number=1,
+            max_attempts=1,
+        ):
             chunks.append(chunk.decode("utf-8"))
 
         first_payload = json.loads(chunks[0].removeprefix("data: ").strip())
@@ -157,6 +252,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(
             app=SimpleNamespace(
                 state=SimpleNamespace(
+                    accounts=SimpleNamespace(account_count=1),
                     codebuff=client,
                     settings=Settings(
                         codebuff_token="token",
@@ -167,19 +263,86 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        chunks = []
-        run = FreebuffRun(
-            run_id="run-1",
-            agent_id="base2-free-deepseek-flash",
-            started_at="2026-05-23T00:00:00.000Z",
+        prepared = PreparedChatAttempt(
+            lease=FakeLease(client, 0),
+            run=FreebuffRun(
+                run_id="run-1",
+                agent_id="base2-free-deepseek-flash",
+                started_at="2026-05-23T00:00:00.000Z",
+            ),
+            payload={},
         )
+
+        chunks = []
         with self.assertLogs("freebuff2api.app", level="WARNING"):
-            async for chunk in _stream_openai_chunks(request, {}, run):
+            async for chunk in _stream_openai_chunks(
+                request,
+                {"model": "deepseek/deepseek-v4-flash", "messages": []},
+                [],
+                resolve_model("deepseek/deepseek-v4-flash"),
+                prepared_attempt=prepared,
+                attempt_number=1,
+                max_attempts=1,
+            ):
                 chunks.append(chunk.decode("utf-8"))
 
         error_payload = json.loads(chunks[0].removeprefix("data: ").strip())
         self.assertEqual(error_payload["error"]["code"], "codebuff_error")
         self.assertEqual(chunks[1], "data: [DONE]\n\n")
+
+    async def test_stream_retries_next_account_before_first_chunk(self) -> None:
+        failing = RetryStreamClient(1, fail_chat=True)
+        succeeding = RetryStreamClient(2, fail_chat=False)
+        accounts = RetryAccounts(
+            [
+                FakeLease(failing, 0),
+                FakeLease(succeeding, 1),
+            ]
+        )
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    accounts=accounts,
+                    codebuff=failing,
+                    settings=Settings(
+                        codebuff_token="token-1,token-2",
+                        local_api_key=None,
+                        client_id="local-client",
+                        debug=False,
+                    ),
+                )
+            )
+        )
+
+        prepared = PreparedChatAttempt(
+            lease=accounts.leases[0],
+            run=FreebuffRun(
+                run_id="run-1",
+                agent_id="base2-free-deepseek-flash",
+                started_at="2026-05-23T00:00:00.000Z",
+            ),
+            payload={"messages": []},
+        )
+
+        chunks = []
+        with self.assertLogs("freebuff2api.app", level="INFO") as logs:
+            async for chunk in _stream_openai_chunks(
+                request,
+                {"model": "deepseek/deepseek-v4-flash", "messages": []},
+                [],
+                resolve_model("deepseek/deepseek-v4-flash"),
+                prepared_attempt=prepared,
+                attempt_number=1,
+                max_attempts=2,
+            ):
+                chunks.append(chunk.decode("utf-8"))
+
+        first_payload = json.loads(chunks[0].removeprefix("data: ").strip())
+        self.assertEqual(first_payload["choices"][0]["delta"]["content"], "hello")
+        self.assertEqual(accounts.calls, [("deepseek/deepseek-v4-flash", (0,))])
+        self.assertTrue(
+            any("retrying chat completion stage=stream" in line for line in logs.output)
+        )
 
 
 if __name__ == "__main__":

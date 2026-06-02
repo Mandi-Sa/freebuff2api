@@ -18,9 +18,20 @@ logger = logging.getLogger("freebuff2api.codebuff")
 
 
 class CodebuffError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 502,
+        *,
+        token_index: int | None = None,
+        token_hint: str | None = None,
+        account_index: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.token_index = token_index
+        self.token_hint = token_hint
+        self.account_index = account_index
 
 
 @dataclass
@@ -636,6 +647,10 @@ class CodebuffAccountLease:
         await self._session_lease.aclose()
         await self._pool.release(self._account_index)
 
+    @property
+    def account_index(self) -> int:
+        return self._account_index
+
 
 class CodebuffAccountPool:
     def __init__(self, settings: Settings) -> None:
@@ -679,12 +694,20 @@ class CodebuffAccountPool:
         self,
         model: str,
         messages: list[dict[str, Any]] | None = None,
+        *,
+        exclude_account_indices: set[int] | None = None,
     ) -> CodebuffAccountLease:
-        account_index = await self._reserve_account()
+        account_index = await self._reserve_account(exclude_account_indices or set())
         account = self._accounts[account_index]
         try:
             session_lease = await account.sessions.acquire_session(model, messages)
         except CodebuffError as error:
+            if error.token_index is None:
+                error.token_index = account.client.settings.token_index
+            if error.token_hint is None:
+                error.token_hint = account.client.settings.token_hint
+            if error.account_index is None:
+                error.account_index = account_index
             logger.warning(
                 "account session acquire failed token_index=%s token=%s model=%s: %s",
                 account.client.settings.token_index,
@@ -717,20 +740,24 @@ class CodebuffAccountPool:
             self._accounts[account_index].busy = False
             self._condition.notify(1)
 
-    async def _reserve_account(self) -> int:
+    async def _reserve_account(self, exclude_account_indices: set[int]) -> int:
+        if len(exclude_account_indices) >= len(self._accounts):
+            raise CodebuffError("No remaining accounts available for retry", 503)
         async with self._condition:
             while True:
-                account_index = self._next_available_index()
+                account_index = self._next_available_index(exclude_account_indices)
                 if account_index is not None:
                     self._accounts[account_index].busy = True
                     self._next_index = (account_index + 1) % len(self._accounts)
                     return account_index
                 await self._condition.wait()
 
-    def _next_available_index(self) -> int | None:
+    def _next_available_index(self, exclude_account_indices: set[int]) -> int | None:
         account_count = len(self._accounts)
         for offset in range(account_count):
             account_index = (self._next_index + offset) % account_count
+            if account_index in exclude_account_indices:
+                continue
             if not self._accounts[account_index].busy:
                 return account_index
         return None

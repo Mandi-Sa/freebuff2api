@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import logging
 from typing import Any, AsyncIterator
 import uuid
@@ -31,6 +32,17 @@ from .sse import decode_sse_data, encode_sse
 
 
 logger = logging.getLogger("freebuff2api.app")
+
+
+@dataclass
+class PreparedChatAttempt:
+    lease: CodebuffAccountLease
+    run: FreebuffRun
+    payload: dict[str, Any]
+
+    @property
+    def client(self) -> CodebuffClient:
+        return self.lease.client
 
 
 @asynccontextmanager
@@ -106,6 +118,126 @@ def _token_hint(client: CodebuffClient | None) -> str:
     return settings.token_hint
 
 
+def _error_token_index(error: CodebuffError) -> int:
+    return error.token_index or 0
+
+
+def _error_token_hint(error: CodebuffError) -> str:
+    return error.token_hint or "unknown"
+
+
+def _max_account_attempts(request: Request) -> int:
+    return max(1, _accounts(request).account_count)
+
+
+def _retry_log(
+    stage: str,
+    *,
+    attempt: int,
+    max_attempts: int,
+    model: str,
+    client: CodebuffClient | None = None,
+) -> None:
+    logger.info(
+        "retrying chat completion stage=%s failed_token_index=%s failed_token=%s next_attempt=%s/%s model=%s",
+        stage,
+        _token_index(client),
+        _token_hint(client),
+        attempt + 1,
+        max_attempts,
+        model,
+    )
+
+
+async def _prepare_chat_attempt(
+    request: Request,
+    body: dict[str, Any],
+    messages: list[dict[str, Any]],
+    model_config: FreebuffModel,
+    *,
+    exclude_account_indices: set[int] | None = None,
+) -> PreparedChatAttempt:
+    settings = _settings(request)
+    lease: CodebuffAccountLease | None = None
+    prepared = False
+    stage = "acquire_session"
+    try:
+        lease = await _accounts(request).acquire_session(
+            model_config.session_id,
+            messages=messages,
+            exclude_account_indices=exclude_account_indices,
+        )
+        client = lease.client
+        stage = "run_setup"
+        await client.validate_agents()
+        await client.request_ad_chain(messages=messages)
+        run = await _start_freebuff_run_chain(client, model_config)
+        trace_session_id = str(uuid.uuid4())
+        payload = build_upstream_payload(
+            {**body, "messages": messages},
+            session=lease.session,
+            run_id=run.payload_run_id,
+            client_id=settings.client_id,
+            trace_session_id=trace_session_id,
+            upstream_model_id=model_config.upstream_id,
+        )
+        if settings.debug:
+            logger.debug(
+                "prepared upstream chat trace=%s run=%s payload=%s",
+                trace_session_id,
+                run,
+                render_debug(payload, settings.log_body_chars),
+            )
+        prepared = True
+        return PreparedChatAttempt(lease=lease, run=run, payload=payload)
+    except CodebuffError as error:
+        if lease is not None:
+            if error.token_index is None:
+                error.token_index = lease.client.settings.token_index
+            if error.token_hint is None:
+                error.token_hint = lease.client.settings.token_hint
+            if error.account_index is None:
+                error.account_index = lease.account_index
+        logger.warning(
+            "chat completion prepare failed stage=%s token_index=%s token=%s: %s",
+            stage,
+            (
+                _token_index(lease.client)
+                if lease is not None
+                else _error_token_index(error)
+            ),
+            (
+                _token_hint(lease.client)
+                if lease is not None
+                else _error_token_hint(error)
+            ),
+            error,
+            exc_info=settings.debug,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "chat completion prepare failed stage=%s token_index=%s token=%s",
+            stage,
+            _token_index(lease.client if lease is not None else None),
+            _token_hint(lease.client if lease is not None else None),
+        )
+        raise
+    finally:
+        if lease is not None and not prepared:
+            await lease.aclose()
+
+
+def _stream_error_payload(error: CodebuffError) -> dict[str, dict[str, str]]:
+    return {
+        "error": {
+            "message": str(error),
+            "type": "upstream_error",
+            "code": "codebuff_error",
+        }
+    }
+
+
 @app.get("/healthz")
 async def healthz(request: Request) -> dict[str, Any]:
     _check_local_auth(request)
@@ -145,154 +277,204 @@ async def chat_completions(request: Request) -> Any:
         )
 
     messages = normalize_chat_messages(body.get("messages"))
-    lease: CodebuffAccountLease | None = None
-    try:
-        lease = await _accounts(request).acquire_session(
-            model_config.session_id,
-            messages=messages,
-        )
-        client = lease.client
-        await client.validate_agents()
-        await client.request_ad_chain(messages=messages)
-        run = await _start_freebuff_run_chain(client, model_config)
-        trace_session_id = str(uuid.uuid4())
-        payload = build_upstream_payload(
-            {**body, "messages": messages},
-            session=lease.session,
-            run_id=run.payload_run_id,
-            client_id=settings.client_id,
-            trace_session_id=trace_session_id,
-            upstream_model_id=model_config.upstream_id,
-        )
-        if settings.debug:
-            logger.debug(
-                "prepared upstream chat trace=%s run=%s payload=%s",
-                trace_session_id,
-                run,
-                render_debug(payload, settings.log_body_chars),
+    max_attempts = _max_account_attempts(request)
+    excluded_accounts: set[int] = set()
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            prepared = await _prepare_chat_attempt(
+                request,
+                body,
+                messages,
+                model_config,
+                exclude_account_indices=excluded_accounts,
             )
-    except CodebuffError as error:
-        if lease is not None:
-            await lease.aclose()
-        logger.warning(
-            "failed to prepare chat completion token_index=%s token=%s: %s",
-            _token_index(lease.client if lease is not None else None),
-            _token_hint(lease.client if lease is not None else None),
-            error,
-            exc_info=settings.debug,
-        )
-        return _error_response(error)
-    except Exception as error:
-        if lease is not None:
-            await lease.aclose()
-        logger.exception("failed to prepare chat completion")
-        return _error_response(error)
+        except CodebuffError as error:
+            if attempt < max_attempts:
+                if error.account_index is not None:
+                    excluded_accounts.add(error.account_index)
+                _retry_log(
+                    "prepare",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    model=model,
+                    client=None,
+                )
+                continue
+            return _error_response(error)
+        except Exception as error:
+            return _error_response(error)
 
-    if body.get("stream") is True:
-        return StreamingResponse(
-            _stream_openai_chunks(request, payload, run, account_lease=lease),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        if body.get("stream") is True:
+            return StreamingResponse(
+                _stream_openai_chunks(
+                    request,
+                    body,
+                    messages,
+                    model_config,
+                    prepared_attempt=prepared,
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
-    try:
-        response = await _collect_completion(
-            request,
-            payload,
-            run,
-            model,
-            client=lease.client,
-        )
-        return JSONResponse(response)
-    except CodebuffError as error:
-        logger.warning(
-            "chat completion failed token_index=%s token=%s run_id=%s: %s",
-            _token_index(lease.client),
-            _token_hint(lease.client),
-            run.run_id,
-            error,
-            exc_info=settings.debug,
-        )
-        return _error_response(error)
-    except Exception as error:
-        logger.exception(
-            "chat completion failed token_index=%s token=%s run_id=%s",
-            _token_index(lease.client),
-            _token_hint(lease.client),
-            run.run_id,
-        )
-        return _error_response(error)
-    finally:
-        await lease.aclose()
+        try:
+            response = await _collect_completion(
+                request,
+                prepared.payload,
+                prepared.run,
+                model,
+                client=prepared.client,
+            )
+            return JSONResponse(response)
+        except CodebuffError as error:
+            logger.warning(
+                "chat completion failed token_index=%s token=%s attempt=%s/%s run_id=%s: %s",
+                _token_index(prepared.client),
+                _token_hint(prepared.client),
+                attempt,
+                max_attempts,
+                prepared.run.run_id,
+                error,
+                exc_info=settings.debug,
+            )
+            if attempt < max_attempts:
+                excluded_accounts.add(prepared.lease.account_index)
+                _retry_log(
+                    "completion",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    model=model,
+                    client=prepared.client,
+                )
+                continue
+            return _error_response(error)
+        except Exception as error:
+            logger.exception(
+                "chat completion failed token_index=%s token=%s attempt=%s/%s run_id=%s",
+                _token_index(prepared.client),
+                _token_hint(prepared.client),
+                attempt,
+                max_attempts,
+                prepared.run.run_id,
+            )
+            return _error_response(error)
+        finally:
+            await prepared.lease.aclose()
+
+    raise RuntimeError("chat completion retries exhausted without response")
 
 
 async def _stream_openai_chunks(
     request: Request,
-    payload: dict[str, Any],
-    run: FreebuffRun,
+    body: dict[str, Any],
+    messages: list[dict[str, Any]],
+    model_config: FreebuffModel,
     *,
-    account_lease: CodebuffAccountLease | None = None,
-    client: CodebuffClient | None = None,
+    prepared_attempt: PreparedChatAttempt,
+    attempt_number: int,
+    max_attempts: int,
 ) -> AsyncIterator[bytes]:
-    message_id: str | None = None
-    client = client or (account_lease.client if account_lease else _client(request))
     settings = _settings(request)
-    try:
-        async for line in client.chat_events(payload):
-            data = decode_sse_data(line)
-            if data is None:
-                continue
-            if data == "[DONE]":
-                if settings.debug:
-                    logger.debug(
-                        "chat stream done run_id=%s message_id=%s",
-                        run.run_id,
-                        message_id,
-                    )
-                yield encode_sse("[DONE]")
-                break
+    attempt = attempt_number
+    current = prepared_attempt
+    excluded_accounts = {current.lease.account_index}
 
-            message_id = data.get("id") or message_id
-            chunk = sanitize_stream_chunk(data)
-            if chunk is not None:
-                if settings.debug:
+    while True:
+        message_id: str | None = None
+        emitted_chunk = False
+        should_retry = False
+        try:
+            async for line in current.client.chat_events(current.payload):
+                data = decode_sse_data(line)
+                if data is None:
+                    continue
+                if data == "[DONE]":
+                    if settings.debug:
+                        logger.debug(
+                            "chat stream done run_id=%s message_id=%s",
+                            current.run.run_id,
+                            message_id,
+                        )
+                    yield encode_sse("[DONE]")
+                    return
+
+                message_id = data.get("id") or message_id
+                chunk = sanitize_stream_chunk(data)
+                if chunk is not None:
+                    emitted_chunk = True
+                    if settings.debug:
+                        logger.debug(
+                            "chat stream chunk=%s",
+                            render_debug(chunk, settings.log_body_chars),
+                        )
+                    yield encode_sse(chunk)
+                elif settings.debug:
                     logger.debug(
-                        "chat stream chunk=%s",
-                        render_debug(chunk, settings.log_body_chars),
+                        "chat stream ignored data=%s",
+                        render_debug(data, settings.log_body_chars),
                     )
-                yield encode_sse(chunk)
-            elif settings.debug:
-                logger.debug(
-                    "chat stream ignored data=%s",
-                    render_debug(data, settings.log_body_chars),
+            return
+        except CodebuffError as error:
+            should_retry = not emitted_chunk and attempt < max_attempts
+            logger.warning(
+                "chat stream failed token_index=%s token=%s attempt=%s/%s run_id=%s emitted_chunk=%s: %s",
+                _token_index(current.client),
+                _token_hint(current.client),
+                attempt,
+                max_attempts,
+                current.run.run_id,
+                emitted_chunk,
+                error,
+                exc_info=settings.debug,
+            )
+            if not should_retry:
+                yield encode_sse(_stream_error_payload(error))
+                yield encode_sse("[DONE]")
+                return
+            _retry_log(
+                "stream",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                model=model_config.id,
+                client=current.client,
+            )
+        finally:
+            _schedule_finalize_run(current.client, current.run, message_id)
+            await current.lease.aclose()
+
+        attempt += 1
+        while True:
+            try:
+                current = await _prepare_chat_attempt(
+                    request,
+                    body,
+                    messages,
+                    model_config,
+                    exclude_account_indices=excluded_accounts,
                 )
-    except CodebuffError as error:
-        logger.warning(
-            "chat stream failed token_index=%s token=%s run_id=%s: %s",
-            _token_index(client),
-            _token_hint(client),
-            run.run_id,
-            error,
-            exc_info=settings.debug,
-        )
-        yield encode_sse(
-            {
-                "error": {
-                    "message": str(error),
-                    "type": "upstream_error",
-                    "code": "codebuff_error",
-                }
-            }
-        )
-        yield encode_sse("[DONE]")
-    finally:
-        _schedule_finalize_run(client, run, message_id)
-        if account_lease is not None:
-            await account_lease.aclose()
+                excluded_accounts.add(current.lease.account_index)
+                break
+            except CodebuffError as error:
+                if error.account_index is not None:
+                    excluded_accounts.add(error.account_index)
+                if attempt >= max_attempts:
+                    yield encode_sse(_stream_error_payload(error))
+                    yield encode_sse("[DONE]")
+                    return
+                _retry_log(
+                    "prepare",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    model=model_config.id,
+                )
+                attempt += 1
 
 
 async def _collect_completion(
