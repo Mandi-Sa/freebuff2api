@@ -41,7 +41,10 @@ class AppErrorTests(unittest.TestCase):
         with self.assertLogs("freebuff2api.app", level="WARNING") as logs:
             self.asyncio_run(_finalize_run_with_client(client, run, None))
 
-        self.assertIn("finalize run failed run_id=run-1: network error", logs.output[0])
+        self.assertIn("token_index=1", logs.output[0])
+        self.assertIn("token=***oken", logs.output[0])
+        self.assertIn("finalize run failed", logs.output[0])
+        self.assertIn("run_id=run-1: network error", logs.output[0])
 
     def asyncio_run(self, awaitable) -> None:
         import asyncio

@@ -14,6 +14,7 @@ load_dotenv()
 class Settings:
     codebuff_token: str | None
     local_api_key: str | None
+    token_index: int = 1
     codebuff_base_url: str = "https://www.codebuff.com"
     zeroclick_base_url: str = "https://zeroclick.dev"
     session_id: str = ""
@@ -59,6 +60,13 @@ class Settings:
             return ()
         values = [item.strip() for item in self.codebuff_token.split(",")]
         return tuple(item for item in values if item)
+
+    @property
+    def token_hint(self) -> str:
+        if not self.codebuff_token:
+            return "no-token"
+        suffix = self.codebuff_token[-4:]
+        return f"***{suffix}"
 
 
 def _csv(name: str, default: str) -> tuple[str, ...]:

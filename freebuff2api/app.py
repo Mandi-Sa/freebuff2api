@@ -92,6 +92,20 @@ def _error_response(error: Exception) -> JSONResponse:
     raise error
 
 
+def _token_index(client: CodebuffClient | None) -> int:
+    settings = getattr(client, "settings", None)
+    if settings is None:
+        return 0
+    return settings.token_index
+
+
+def _token_hint(client: CodebuffClient | None) -> str:
+    settings = getattr(client, "settings", None)
+    if settings is None:
+        return "unknown"
+    return settings.token_hint
+
+
 @app.get("/healthz")
 async def healthz(request: Request) -> dict[str, Any]:
     _check_local_auth(request)
@@ -161,7 +175,9 @@ async def chat_completions(request: Request) -> Any:
         if lease is not None:
             await lease.aclose()
         logger.warning(
-            "failed to prepare chat completion: %s",
+            "failed to prepare chat completion token_index=%s token=%s: %s",
+            _token_index(lease.client if lease is not None else None),
+            _token_hint(lease.client if lease is not None else None),
             error,
             exc_info=settings.debug,
         )
@@ -192,7 +208,23 @@ async def chat_completions(request: Request) -> Any:
             client=lease.client,
         )
         return JSONResponse(response)
+    except CodebuffError as error:
+        logger.warning(
+            "chat completion failed token_index=%s token=%s run_id=%s: %s",
+            _token_index(lease.client),
+            _token_hint(lease.client),
+            run.run_id,
+            error,
+            exc_info=settings.debug,
+        )
+        return _error_response(error)
     except Exception as error:
+        logger.exception(
+            "chat completion failed token_index=%s token=%s run_id=%s",
+            _token_index(lease.client),
+            _token_hint(lease.client),
+            run.run_id,
+        )
         return _error_response(error)
     finally:
         await lease.aclose()
@@ -240,7 +272,9 @@ async def _stream_openai_chunks(
                 )
     except CodebuffError as error:
         logger.warning(
-            "chat stream failed run_id=%s: %s",
+            "chat stream failed token_index=%s token=%s run_id=%s: %s",
+            _token_index(client),
+            _token_hint(client),
             run.run_id,
             error,
             exc_info=settings.debug,
@@ -433,7 +467,9 @@ async def _finalize_run_with_client(
         logger.debug("finalize run done run_id=%s", run.run_id)
     except CodebuffError as error:
         logger.warning(
-            "finalize run failed run_id=%s: %s",
+            "finalize run failed token_index=%s token=%s run_id=%s: %s",
+            _token_index(client),
+            _token_hint(client),
             run.run_id,
             error,
             exc_info=client.settings.debug,

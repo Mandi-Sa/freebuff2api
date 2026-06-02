@@ -641,8 +641,12 @@ class CodebuffAccountPool:
     def __init__(self, settings: Settings) -> None:
         tokens = settings.codebuff_tokens or (None,)
         self._accounts: list[CodebuffAccount] = []
-        for token in tokens:
-            account_settings = replace(settings, codebuff_token=token)
+        for index, token in enumerate(tokens, start=1):
+            account_settings = replace(
+                settings,
+                codebuff_token=token,
+                token_index=index,
+            )
             client = CodebuffClient(account_settings)
             self._accounts.append(
                 CodebuffAccount(
@@ -680,7 +684,24 @@ class CodebuffAccountPool:
         account = self._accounts[account_index]
         try:
             session_lease = await account.sessions.acquire_session(model, messages)
+        except CodebuffError as error:
+            logger.warning(
+                "account session acquire failed token_index=%s token=%s model=%s: %s",
+                account.client.settings.token_index,
+                account.client.settings.token_hint,
+                model,
+                error,
+                exc_info=account.client.settings.debug,
+            )
+            await self.release(account_index)
+            raise
         except Exception:
+            logger.exception(
+                "account session acquire failed token_index=%s token=%s model=%s",
+                account.client.settings.token_index,
+                account.client.settings.token_hint,
+                model,
+            )
             await self.release(account_index)
             raise
         return CodebuffAccountLease(

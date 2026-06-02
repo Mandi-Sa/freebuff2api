@@ -98,6 +98,17 @@ class PoolClient:
         }
 
 
+class FailingPoolClient(PoolClient):
+    async def get_session(self, instance_id=None):
+        return {"status": "none"}
+
+    async def request_ad_chain(self, messages=None, *, surface=None) -> None:
+        return None
+
+    async def create_session(self, model):
+        raise CodebuffError("Codebuff request failed: 429 rate_limited", 429)
+
+
 class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_switch_model_deletes_active_upstream_session_before_create(self):
         client = SwitchModelClient()
@@ -176,6 +187,25 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 await second.aclose()
                 await first.aclose()
                 await pool.aclose()
+
+    async def test_account_pool_logs_account_label_when_session_acquire_fails(self):
+        settings = Settings(
+            codebuff_token="first-token-1234",
+            local_api_key=None,
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", FailingPoolClient):
+            pool = CodebuffAccountPool(settings)
+            try:
+                with self.assertLogs("freebuff2api.codebuff", level="WARNING") as logs:
+                    with self.assertRaises(CodebuffError):
+                        await pool.acquire_session("deepseek/deepseek-v4-flash")
+            finally:
+                await pool.aclose()
+
+        self.assertIn("token_index=1", logs.output[0])
+        self.assertIn("token=***1234", logs.output[0])
+        self.assertIn("429 rate_limited", logs.output[0])
 
 
 if __name__ == "__main__":
