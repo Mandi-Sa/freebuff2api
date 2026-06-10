@@ -30,6 +30,11 @@ class OpenAICompatTests(unittest.TestCase):
 
         self.assertEqual(model.agent_id, "base2-free-kimi")
 
+    def test_resolve_minimax_m3_maps_har_agent_id(self) -> None:
+        model = resolve_model("minimax/minimax-m3")
+
+        self.assertEqual(model.agent_id, "base2-free-minimax-m3")
+
     def test_resolve_gemini_model_maps_allowed_agent_combo(self) -> None:
         model = resolve_model("google/gemini-3.1-pro-preview")
 

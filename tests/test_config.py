@@ -73,6 +73,18 @@ class ConfigTests(unittest.TestCase):
             ("token-a", "token-b", "token-c"),
         )
 
+    def test_load_settings_does_not_expose_custom_browser_user_agent(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "FREEBUFF_BROWSER_UA": "custom-client/1.0",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertFalse(hasattr(settings, "browser_user_agent"))
+
 
 if __name__ == "__main__":
     unittest.main()

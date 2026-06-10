@@ -5,6 +5,9 @@ import httpx
 
 from freebuff2api.codebuff import CodebuffError
 from freebuff2api.codebuff import CodebuffClient
+from freebuff2api.codebuff import CHAT_COMPLETIONS_USER_AGENT
+from freebuff2api.codebuff import CODEBUFF_ACCEPT_ENCODING
+from freebuff2api.config import HAR_BROWSER_USER_AGENT
 from freebuff2api.config import Settings
 
 
@@ -138,6 +141,7 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
                 {"role": "assistant", "content": ""},
             ],
         )
+        self.assertEqual(client.body["userAgent"], HAR_BROWSER_USER_AGENT)
         self.assertIsInstance(messages[0]["content"], list)
 
     async def test_request_ads_maps_developer_role_to_system(self) -> None:
@@ -328,6 +332,40 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("当前 IP/区域", str(ctx.exception))
         self.assertIn("US", str(ctx.exception))
+
+    async def test_chat_events_uses_har_fingerprint_headers(self) -> None:
+        captured_headers = {}
+
+        def capture_headers(request: httpx.Request) -> httpx.Response:
+            captured_headers.update(dict(request.headers))
+            return httpx.Response(200, content=b"data: [DONE]\n\n")
+
+        client = CodebuffClient(
+            Settings(
+                codebuff_token="token",
+                local_api_key=None,
+                request_timeout=1,
+            )
+        )
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(capture_headers),
+            timeout=1,
+        )
+
+        try:
+            async for _ in client.chat_events({"messages": []}):
+                pass
+        finally:
+            await client.aclose()
+
+        self.assertEqual(captured_headers["authorization"], "Bearer token")
+        self.assertEqual(captured_headers["content-type"], "application/json")
+        self.assertEqual(captured_headers["user-agent"], CHAT_COMPLETIONS_USER_AGENT)
+        self.assertEqual(captured_headers["connection"], "keep-alive")
+        self.assertEqual(captured_headers["accept"], "*/*")
+        self.assertEqual(captured_headers["host"], "www.codebuff.com")
+        self.assertEqual(captured_headers["accept-encoding"], CODEBUFF_ACCEPT_ENCODING)
 
 
 if __name__ == "__main__":

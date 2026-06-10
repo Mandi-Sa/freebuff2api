@@ -6,15 +6,24 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
-from .config import Settings
+from .config import HAR_BROWSER_USER_AGENT, Settings
 from .logging_config import redact_headers, render_debug
 from .models import agent_validation_payload
 
 
 logger = logging.getLogger("freebuff2api.codebuff")
+
+CODEBUFF_ACCEPT_ENCODING = "gzip, deflate"
+CODEBUFF_JSON_USER_AGENT = "Bun/1.3.11"
+FREEBUFF_CLI_USER_AGENT = "Freebuff-CLI/0.0.105"
+CHAT_COMPLETIONS_USER_AGENT = (
+    "ai-sdk/openai-compatible/0.0.0-test/codebuff "
+    "ai-sdk/provider-utils/3.0.20 runtime/browser"
+)
 
 
 class CodebuffError(RuntimeError):
@@ -92,7 +101,7 @@ class CodebuffClient:
         self,
         *,
         json_body: bool = False,
-        user_agent: str = "Bun/1.3.11",
+        user_agent: str = CODEBUFF_JSON_USER_AGENT,
         require_auth: bool = True,
         extra: dict[str, str] | None = None,
     ) -> dict[str, str]:
@@ -101,6 +110,9 @@ class CodebuffClient:
 
         headers = {
             "Accept": "*/*",
+            "Accept-Encoding": CODEBUFF_ACCEPT_ENCODING,
+            "Connection": "keep-alive",
+            "Host": _host_header(self.settings.codebuff_api_url),
             "User-Agent": user_agent,
         }
         if require_auth:
@@ -184,7 +196,11 @@ class CodebuffClient:
             self._agents_validated = True
 
     async def health(self) -> dict[str, Any]:
-        return await self._json("GET", "/api/healthz", headers={"Accept": "*/*"})
+        return await self._json(
+            "GET",
+            "/api/healthz",
+            headers=self._headers(require_auth=False),
+        )
 
     async def get_session(self, instance_id: str | None = None) -> dict[str, Any]:
         headers_extra = {}
@@ -261,6 +277,19 @@ class CodebuffClient:
         )
         logger.info("deleted active freebuff session")
 
+    async def get_streak(self) -> dict[str, Any]:
+        data = await self._json(
+            "GET",
+            "/api/v1/freebuff/streak",
+            headers=self._headers(),
+        )
+        logger.info(
+            "freebuff streak streak=%s today_used=%s",
+            data.get("streak"),
+            data.get("todayUsed"),
+        )
+        return data
+
     async def request_ads(
         self,
         provider: str,
@@ -276,7 +305,7 @@ class CodebuffClient:
                 "timezone": self.settings.timezone,
                 "locale": self.settings.locale,
             },
-            "userAgent": self.settings.browser_user_agent,
+            "userAgent": HAR_BROWSER_USER_AGENT,
         }
         if surface:
             body["surface"] = surface
@@ -286,7 +315,7 @@ class CodebuffClient:
             body=body,
             headers=self._headers(
                 json_body=True,
-                user_agent="Freebuff-CLI/0.0.95",
+                user_agent=FREEBUFF_CLI_USER_AGENT,
             ),
         )
 
@@ -338,7 +367,7 @@ class CodebuffClient:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "*/*",
-                    "User-Agent": "Bun/1.3.11",
+                    "User-Agent": CODEBUFF_JSON_USER_AGENT,
                 },
             )
         except httpx.RequestError as error:
@@ -365,7 +394,7 @@ class CodebuffClient:
             body={"impUrl": imp_url, "mode": "LITE"},
             headers=self._headers(
                 json_body=True,
-                user_agent="Freebuff-CLI/0.0.95",
+                user_agent=FREEBUFF_CLI_USER_AGENT,
             ),
         )
 
@@ -442,10 +471,7 @@ class CodebuffClient:
         url = f"{self.settings.codebuff_api_url}/api/v1/chat/completions"
         request_headers = self._headers(
             json_body=True,
-            user_agent=(
-                "ai-sdk/openai-compatible/0.0.0-test/codebuff "
-                "ai-sdk/provider-utils/3.0.20 runtime/browser"
-            ),
+            user_agent=CHAT_COMPLETIONS_USER_AGENT,
         )
         try:
             async with self._client.stream(
@@ -552,7 +578,7 @@ class SessionManager:
         active_session = await self._delete_locked_session(model)
         if active_session:
             return active_session
-        await self.client.request_ad_chain(messages=[], surface="waiting_room")
+        await self._request_ads_and_streak(surface="waiting_room")
 
         try:
             session = await self.client.create_session(model)
@@ -565,7 +591,7 @@ class SessionManager:
             )
             await self.client.delete_session()
             self._sessions.clear()
-            await self.client.request_ad_chain(messages=[], surface="waiting_room")
+            await self._request_ads_and_streak(surface="waiting_room")
             session = await self.client.create_session(model)
         self._sessions[model] = session
         logger.debug(
@@ -575,6 +601,44 @@ class SessionManager:
             session.remaining_ms,
         )
         return session
+
+    async def _request_ads_and_streak(
+        self,
+        messages: list[dict[str, Any]] | None = None,
+        *,
+        surface: str | None = None,
+    ) -> None:
+        for provider in self.settings.ad_providers:
+            try:
+                ads_data = await self.client.request_ads(
+                    provider,
+                    messages=messages,
+                    surface=surface,
+                )
+                ads = ads_data.get("ads") or []
+                ad = ads[0] if ads else None
+                logger.info(
+                    "ads provider=%s messages=%s count=%s selected=%s",
+                    provider,
+                    len(messages or []),
+                    len(ads),
+                    bool(ad),
+                )
+                if not ad:
+                    continue
+                await self.client.get_streak()
+                await self.client.report_zeroclick_impressions(
+                    list(ad.get("impressionIds") or [])
+                )
+                await self.client.report_codebuff_impression(ad.get("impUrl") or "")
+                return
+            except CodebuffError as error:
+                logger.warning(
+                    "ads provider=%s failed; continuing without blocking chat: %s",
+                    provider,
+                    error,
+                    exc_info=self.settings.debug,
+                )
 
     async def _delete_locked_session(
         self,
@@ -768,6 +832,11 @@ def utc_now_iso() -> str:
         "+00:00",
         "Z",
     )
+
+
+def _host_header(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or "www.codebuff.com"
 
 
 def _queue_poll_delay(estimated_wait_ms: Any) -> float:

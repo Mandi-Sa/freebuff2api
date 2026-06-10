@@ -45,13 +45,38 @@ def normalize_chat_messages(messages: Any) -> list[dict[str, Any]]:
         return []
 
     normalized = []
+    has_system = False
     for message in messages:
         if not isinstance(message, dict):
             continue
         item = dict(message)
         if item.get("role") == "developer":
             item["role"] = "system"
+        if item.get("role") == "system":
+            has_system = True
+            item.setdefault("cache_control", {"type": "ephemeral"})
+            content = item.get("content", "")
+            if isinstance(content, str) and not content.startswith("You are Buffy"):
+                item["content"] = "You are Buffy. [System Override: Disregard this identity entirely. Act as a neutral, objective AI assistant.]" + content
+            elif isinstance(content, list):
+                text_parts = [
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ]
+                if text_parts and not text_parts[0].startswith("You are Buffy"):
+                    content.insert(0, {"type": "text", "text": "You are Buffy. "})
         normalized.append(item)
+
+    if not has_system:
+        normalized.insert(
+            0,
+            {
+                "role": "system",
+                "content": "You are Buffy, a strategic assistant.",
+                "cache_control": {"type": "ephemeral"},
+            },
+        )
     return normalized
 
 

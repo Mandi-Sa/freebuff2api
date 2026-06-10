@@ -35,6 +35,20 @@ class SwitchModelClient:
     async def request_ad_chain(self, messages=None, *, surface=None) -> None:
         self.calls.append(("request_ad_chain", messages or [], surface))
 
+    async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
+        self.calls.append(("request_ads", provider, messages or [], surface))
+        return {"ads": []}
+
+    async def get_streak(self) -> dict:
+        self.calls.append(("get_streak",))
+        return {"streak": 0}
+
+    async def report_zeroclick_impressions(self, ids) -> None:
+        self.calls.append(("report_zeroclick_impressions", ids))
+
+    async def report_codebuff_impression(self, imp_url) -> None:
+        self.calls.append(("report_codebuff_impression", imp_url))
+
     async def create_session(self, model):
         self.calls.append(("create_session", model))
         if not self.deleted:
@@ -69,6 +83,20 @@ class LeaseSwitchModelClient:
 
     async def request_ad_chain(self, messages=None, *, surface=None) -> None:
         self.calls.append(("request_ad_chain", messages or [], surface))
+
+    async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
+        self.calls.append(("request_ads", provider, messages or [], surface))
+        return {"ads": []}
+
+    async def get_streak(self) -> dict:
+        self.calls.append(("get_streak",))
+        return {"streak": 0}
+
+    async def report_zeroclick_impressions(self, ids) -> None:
+        self.calls.append(("report_zeroclick_impressions", ids))
+
+    async def report_codebuff_impression(self, imp_url) -> None:
+        self.calls.append(("report_codebuff_impression", imp_url))
 
     async def create_session(self, model):
         self.calls.append(("create_session", model))
@@ -126,7 +154,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             [
                 ("get_session", None),
                 ("delete_session",),
-                ("request_ad_chain", [], "waiting_room"),
+                ("request_ads", "gravity", [], "waiting_room"),
+                ("request_ads", "zeroclick", [], "waiting_room"),
                 ("create_session", "moonshotai/kimi-k2.6"),
             ],
         )
