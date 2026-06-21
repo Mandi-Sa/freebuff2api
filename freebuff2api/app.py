@@ -265,7 +265,19 @@ async def healthz(request: Request) -> dict[str, Any]:
 @app.get("/v1/models")
 async def list_models(request: Request) -> dict[str, Any]:
     _check_local_auth(request)
-    return models_response()
+    settings = _settings(request)
+    data = models_response()
+    data["data"] = [
+        model
+        for model in data["data"]
+        if settings.is_allowed(resolve_model(model["id"]).session_id)
+    ]
+    return data
+
+
+def _allowed_models_hint(settings: Settings) -> str:
+    unlimited = ", ".join(settings.unlimited_models) or "(none)"
+    return f"{settings.premium_model} (premium); {unlimited} (unlimited)"
 
 
 @app.post("/v1/chat/completions")
@@ -280,6 +292,15 @@ async def chat_completions(request: Request) -> Any:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     model = model_config.id
+    # gate on the underlying session model, so models that ride an allowed host
+    # (e.g. gemini-3.1-pro -> kimi, gemini flash-lite -> deepseek-flash) pass.
+    session_model = model_config.session_id
+    if not settings.is_allowed(session_model):
+        logger.info("chat completion rejected model=%s reason=not_allowed", model)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{model}' is not allowed. Allowed: {_allowed_models_hint(settings)}",
+        )
     logger.info(
         "chat completion request model=%s stream=%s messages=%s",
         model,

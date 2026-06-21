@@ -101,6 +101,45 @@ class RetryClient(CodebuffClient):
 
 
 class AppErrorTests(unittest.TestCase):
+    def test_chat_completion_rejects_disallowed_model(self) -> None:
+        app.state.settings = Settings(
+            codebuff_token="t1",
+            local_api_key=None,
+            unlimited_model="deepseek/deepseek-v4-flash",
+            premium_model="moonshotai/kimi-k2.6",
+        )
+        response = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "deepseek/deepseek-v4-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_list_models_only_returns_allowed(self) -> None:
+        app.state.settings = Settings(
+            codebuff_token="t1",
+            local_api_key=None,
+            unlimited_model="deepseek/deepseek-v4-flash,minimax/minimax-m3",
+            premium_model="moonshotai/kimi-k2.6",
+        )
+        response = TestClient(app).get("/v1/models")
+        ids = {m["id"] for m in response.json()["data"]}
+        self.assertEqual(
+            ids,
+            {
+                "moonshotai/kimi-k2.6",
+                "deepseek/deepseek-v4-flash",
+                "minimax/minimax-m3",
+                # gemini variants ride allowed hosts (kimi / deepseek-flash)
+                "google/gemini-2.5-flash-lite",
+                "google/gemini-3.1-flash-lite-preview",
+                "google/gemini-3.1-pro-preview",
+            },
+        )
+
     def test_codebuff_error_returns_original_status_code(self) -> None:
         response = _error_response(CodebuffError("rate limited", 429))
         body = json.loads(response.body)
