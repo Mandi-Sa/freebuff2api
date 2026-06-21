@@ -81,6 +81,12 @@ class QuotaStore:
         reset_at: str | None,
     ) -> None:
         with self._lock:
+            previous = self._quotas.get(token_index)
+            changed = previous is None or (
+                previous.used != used
+                or previous.limit != limit
+                or previous.reset_at != reset_at
+            )
             self._quotas[token_index] = TokenQuota(
                 token_index=token_index,
                 token_hint=token_hint,
@@ -89,15 +95,18 @@ class QuotaStore:
                 reset_at=reset_at,
                 updated_at=_now_iso(),
             )
-            self._persist_locked()
-        logger.info(
-            "premium quota token_index=%s token=%s used=%s/%s resetAt=%s",
-            token_index,
-            token_hint,
-            _fmt(used),
-            _fmt(limit),
-            reset_at,
-        )
+            if changed:
+                self._persist_locked()
+        # session ops are frequent; only log when the counter actually moves
+        if changed:
+            logger.info(
+                "premium quota token_index=%s token=%s used=%s/%s resetAt=%s",
+                token_index,
+                token_hint,
+                _fmt(used),
+                _fmt(limit),
+                reset_at,
+            )
 
     def _persist_locked(self) -> None:
         payload = {

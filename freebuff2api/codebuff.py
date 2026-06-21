@@ -1024,7 +1024,7 @@ class CodebuffAccountPool:
             return
         active_settings = self._accounts[active_index].client.settings
         logger.info(
-            "using fallback freebuff token=%s (current window token_index=%s busy) model=%s",
+            "using fallback freebuff token=%s (current window token_index=%s unavailable) model=%s",
             client_settings.token_hint,
             active_settings.token_index,
             model,
@@ -1115,10 +1115,18 @@ class CodebuffAccountPool:
             self._premium_block_watcher(account_index, account.premium_started)
         )
         logger.info(
-            "premium session opened token=%s block=%ss",
+            "premium session opened token=%s block=%ss used=%s",
             account.client.settings.token_hint,
             int(self._settings.session_block_seconds),
+            self._used_str(account.client.settings.token_index),
         )
+
+    def _used_str(self, token_index: int) -> str:
+        tracked = self._quota.get(token_index)
+        if tracked is None or tracked.used is None:
+            return "?"
+        limit = "?" if tracked.limit is None else f"{tracked.limit:g}"
+        return f"{tracked.used:g}/{limit}"
 
     def _clear_premium(self, account_index: int) -> None:
         account = self._accounts[account_index]
@@ -1152,6 +1160,10 @@ class CodebuffAccountPool:
                 if account.premium_started != start:
                     return
                 if account.busy:
+                    logger.info(
+                        "premium session destroy deferred token=%s reason=busy -> next block",
+                        account.client.settings.token_hint,
+                    )
                     k += 1  # busy serving; defer to the next block window
                     continue
                 account.busy = True  # reserve for destroy
