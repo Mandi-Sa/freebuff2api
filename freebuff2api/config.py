@@ -42,6 +42,7 @@ class Settings:
     os_name: str = "windows"
     unlimited_model: str = "deepseek/deepseek-v4-flash"
     schedule_utc_offset: float = -7.0
+    session_idle_timeout: float = 10.0
 
     @property
     def codebuff_api_url(self) -> str:
@@ -70,11 +71,6 @@ class Settings:
     def unlimited_models(self) -> tuple[str, ...]:
         values = [item.strip() for item in self.unlimited_model.split(",")]
         return tuple(item for item in values if item)
-
-    @property
-    def park_model(self) -> str | None:
-        models = self.unlimited_models
-        return models[0] if models else None
 
     @property
     def schedule_timezone(self) -> timezone:
@@ -143,4 +139,5 @@ def load_settings() -> Settings:
             "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
         ),
         schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
+        session_idle_timeout=float(os.getenv("FREEBUFF_SESSION_IDLE_TIMEOUT", "10")),
     )

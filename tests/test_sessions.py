@@ -141,12 +141,13 @@ class FailingPoolClient(PoolClient):
 
 class ParkingPoolClient(PoolClient):
     parked_models: list[str] = []
+    deleted_tokens: list[str] = []
 
     async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
         return {"ads": []}
 
     async def delete_session(self) -> None:
-        return None
+        ParkingPoolClient.deleted_tokens.append(self.settings.codebuff_token)
 
     async def create_session(self, model):
         ParkingPoolClient.parked_models.append(model)
@@ -155,6 +156,21 @@ class ParkingPoolClient(PoolClient):
             model=model,
             remaining_ms=3_000_000,
         )
+
+
+class IdlePoolClient(PoolClient):
+    deleted: list[str] = []
+
+    async def get_session(self, instance_id=None):
+        return {
+            "status": "active",
+            "instanceId": f"{self.settings.codebuff_token}-instance",
+            "model": "deepseek/deepseek-v4-pro",
+            "remainingMs": 3_000_000,
+        }
+
+    async def delete_session(self) -> None:
+        IdlePoolClient.deleted.append(self.settings.codebuff_token)
 
 
 class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -267,12 +283,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_token_window_index(datetime(2026, 6, 21, 23, 59, 59), 5), 4)
         self.assertEqual(_token_window_index(datetime(2026, 6, 21, 12, 0, 0), 1), 0)
 
-    async def test_window_switch_parks_previous_token_on_unlimited_model(self):
-        ParkingPoolClient.parked_models = []
+    async def test_window_switch_deletes_previous_token_session(self):
+        ParkingPoolClient.deleted_tokens = []
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="moonshotai/kimi-k2.6",
+            session_idle_timeout=0,
         )
         windows = iter([0, 1])
 
@@ -290,7 +307,49 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 await pool.aclose()
 
         self.assertEqual(second.client.settings.codebuff_token, "token-b")
-        self.assertEqual(ParkingPoolClient.parked_models, ["moonshotai/kimi-k2.6"])
+        self.assertEqual(ParkingPoolClient.deleted_tokens, ["token-a"])
+
+    async def test_premium_request_schedules_idle_session_delete(self):
+        IdlePoolClient.deleted = []
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6",
+            session_idle_timeout=0.05,
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
+                await lease.aclose()
+                await asyncio.sleep(0.2)
+                await pool.aclose()
+
+        self.assertEqual(IdlePoolClient.deleted, ["token-a"])
+
+    async def test_unlimited_request_does_not_schedule_idle_delete(self):
+        IdlePoolClient.deleted = []
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="deepseek/deepseek-v4-pro",
+            session_idle_timeout=0.05,
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
+                await lease.aclose()
+                await asyncio.sleep(0.2)
+                await pool.aclose()
+
+        self.assertEqual(IdlePoolClient.deleted, [])
 
     async def test_non_unlimited_model_waits_for_current_token_without_switching(self):
         settings = Settings(
@@ -355,7 +414,6 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             local_api_key=None,
             unlimited_model="moonshotai/kimi-k2.6, minimax/minimax-m3",
         )
-        self.assertEqual(settings.park_model, "moonshotai/kimi-k2.6")
 
         with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):
             with patch(

@@ -543,6 +543,14 @@ class SessionManager:
             raise
         return FreebuffSessionLease(session=session, _lock=self._lock)
 
+    async def delete_session_if_any(self) -> bool:
+        async with self._lock:
+            if not self._sessions:
+                return False
+            self._sessions.clear()
+            await self.client.delete_session()
+            return True
+
     async def _ensure_session_locked(
         self,
         model: str,
@@ -707,6 +715,7 @@ class CodebuffAccountLease:
     _session_lease: FreebuffSessionLease
     _pool: CodebuffAccountPool
     _account_index: int
+    _premium: bool = False
     _closed: bool = False
 
     async def aclose(self) -> None:
@@ -714,7 +723,10 @@ class CodebuffAccountLease:
             return
         self._closed = True
         await self._session_lease.aclose()
-        await self._pool.release(self._account_index)
+        await self._pool.release(
+            self._account_index,
+            schedule_idle_cleanup=self._premium,
+        )
 
     @property
     def account_index(self) -> int:
@@ -742,6 +754,7 @@ class CodebuffAccountPool:
         self._active_index: int | None = None
         self._condition = asyncio.Condition()
         self._scheduler_task: asyncio.Task[None] | None = None
+        self._idle_timers: dict[int, asyncio.Task[None]] = {}
 
     @property
     def account_count(self) -> int:
@@ -769,6 +782,9 @@ class CodebuffAccountPool:
             except asyncio.CancelledError:
                 pass
             self._scheduler_task = None
+        for timer in list(self._idle_timers.values()):
+            timer.cancel()
+        self._idle_timers.clear()
         await asyncio.gather(
             *(account.client.aclose() for account in self._accounts),
             return_exceptions=True,
@@ -840,12 +856,20 @@ class CodebuffAccountPool:
             _session_lease=session_lease,
             _pool=self,
             _account_index=account_index,
+            _premium=model not in self._settings.unlimited_models,
         )
 
-    async def release(self, account_index: int) -> None:
+    async def release(
+        self,
+        account_index: int,
+        *,
+        schedule_idle_cleanup: bool = False,
+    ) -> None:
         async with self._condition:
             self._accounts[account_index].busy = False
             self._condition.notify(1)
+        if schedule_idle_cleanup:
+            self._schedule_idle_cleanup(account_index)
 
     async def _reserve_account(
         self,
@@ -874,6 +898,7 @@ class CodebuffAccountPool:
                 )
                 if account_index is not None:
                     self._accounts[account_index].busy = True
+                    self._cancel_idle_timer(account_index)
                     self._bind_token_context(account_index, allow_switch)
                     self._log_account_selected(account_index, model)
                     return account_index
@@ -958,46 +983,78 @@ class CodebuffAccountPool:
             self._accounts[new_index].client.settings.token_index,
             account_count,
         )
-        self._schedule_park(previous_index)
+        self._schedule_session_delete(previous_index, "rotate")
 
-    def _schedule_park(self, account_index: int) -> None:
-        model = self._settings.park_model
-        if not model:
-            return
+    def _schedule_session_delete(self, account_index: int, reason: str) -> None:
         account = self._accounts[account_index]
-        task = asyncio.create_task(self._park_account(account_index, model))
+        task = asyncio.create_task(self._delete_account_session(account_index, reason))
 
-        def _log_park_error(done: asyncio.Task[None]) -> None:
+        def _log_error(done: asyncio.Task[None]) -> None:
             try:
                 done.result()
             except asyncio.CancelledError:
                 pass
             except Exception:
                 logger.warning(
-                    "parking token_index=%s token=%s on unlimited model=%s failed",
+                    "deleting session token_index=%s token=%s reason=%s failed",
                     account.client.settings.token_index,
                     account.client.settings.token_hint,
-                    model,
+                    reason,
                     exc_info=account.client.settings.debug,
                 )
 
-        task.add_done_callback(_log_park_error)
+        task.add_done_callback(_log_error)
 
-    async def _park_account(self, account_index: int, model: str) -> None:
+    async def _delete_account_session(self, account_index: int, reason: str) -> bool:
         account = self._accounts[account_index]
-        set_request_id("park")
-        self._bind_token_context(account_index, allow_switch=True)
-        lease = await account.sessions.acquire_session(model)
-        try:
+        set_request_id(reason)
+        set_token_context(
+            f"t{account.client.settings.token_index}/{len(self._accounts)}", ""
+        )
+        deleted = await account.sessions.delete_session_if_any()
+        if deleted:
             logger.info(
-                "parked token_index=%s token=%s on unlimited model=%s instance_id=%s",
-                account.client.settings.token_index,
+                "deleted freebuff session token=%s reason=%s",
                 account.client.settings.token_hint,
-                model,
-                lease.session.instance_id,
+                reason,
+            )
+        return deleted
+
+    def _cancel_idle_timer(self, account_index: int) -> None:
+        timer = self._idle_timers.pop(account_index, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_cleanup(self, account_index: int) -> None:
+        timeout = self._settings.session_idle_timeout
+        if timeout <= 0:
+            return
+        self._cancel_idle_timer(account_index)
+        self._idle_timers[account_index] = asyncio.create_task(
+            self._idle_cleanup(account_index, timeout)
+        )
+
+    async def _idle_cleanup(self, account_index: int, timeout: float) -> None:
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+        async with self._condition:
+            if self._accounts[account_index].busy:
+                return
+            self._accounts[account_index].busy = True
+        try:
+            await self._delete_account_session(account_index, "idle")
+        except CodebuffError as error:
+            logger.warning(
+                "idle session cleanup token=%s failed: %s",
+                self._accounts[account_index].client.settings.token_hint,
+                error,
+                exc_info=self._settings.debug,
             )
         finally:
-            await lease.aclose()
+            self._idle_timers.pop(account_index, None)
+            await self.release(account_index)
 
 
 def _token_window_index(now: datetime, account_count: int) -> int:
