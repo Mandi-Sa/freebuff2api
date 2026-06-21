@@ -310,12 +310,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.client.settings.codebuff_token, "token-b")
         self.assertEqual(ParkingPoolClient.deleted_tokens, ["token-a"])
 
-    async def test_premium_request_schedules_idle_session_delete(self):
+    async def test_unlimited_request_schedules_idle_delete(self):
         IdlePoolClient.deleted = []
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="deepseek/deepseek-v4-pro",
+            premium_model="moonshotai/kimi-k2.6",
             session_idle_timeout=0.05,
         )
 
@@ -331,13 +332,41 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(IdlePoolClient.deleted, ["token-a"])
 
-    async def test_unlimited_request_does_not_schedule_idle_delete(self):
+    async def test_premium_request_not_idle_deleted_uses_block_watcher(self):
         IdlePoolClient.deleted = []
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="deepseek/deepseek-v4-pro",
+            unlimited_model="moonshotai/kimi-k2.6",
+            premium_model="deepseek/deepseek-v4-pro",
             session_idle_timeout=0.05,
+            session_block_seconds=999,
+            destroy_lead_seconds=0,
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
+                self.assertTrue(pool._accounts[0].holds_premium)
+                await lease.aclose()
+                await asyncio.sleep(0.2)  # past idle timeout, but premium is exempt
+                try:
+                    self.assertEqual(IdlePoolClient.deleted, [])
+                finally:
+                    await pool.aclose()
+
+    async def test_premium_block_watcher_destroys_session_at_window(self):
+        IdlePoolClient.deleted = []
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6",
+            premium_model="deepseek/deepseek-v4-pro",
+            session_block_seconds=0.2,
+            destroy_lead_seconds=0.05,
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
@@ -347,10 +376,12 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 pool = CodebuffAccountPool(settings)
                 lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
                 await lease.aclose()
-                await asyncio.sleep(0.2)
-                await pool.aclose()
-
-        self.assertEqual(IdlePoolClient.deleted, [])
+                await asyncio.sleep(0.45)  # past the destroy window (~0.15s)
+                try:
+                    self.assertEqual(IdlePoolClient.deleted, ["token-a"])
+                    self.assertFalse(pool._accounts[0].holds_premium)
+                finally:
+                    await pool.aclose()
 
     async def test_non_unlimited_model_waits_for_current_token_without_switching(self):
         settings = Settings(

@@ -739,6 +739,12 @@ class CodebuffAccount:
     client: CodebuffClient
     sessions: SessionManager
     busy: bool = False
+    premium_started: float | None = None  # monotonic; set when premium session created
+    premium_instance_id: str | None = None
+
+    @property
+    def holds_premium(self) -> bool:
+        return self.premium_started is not None
 
 
 @dataclass
@@ -756,9 +762,11 @@ class CodebuffAccountLease:
             return
         self._closed = True
         await self._session_lease.aclose()
+        # premium sessions are torn down by the block watcher, not idle cleanup;
+        # unlimited sessions use the idle timeout.
         await self._pool.release(
             self._account_index,
-            schedule_idle_cleanup=self._premium,
+            schedule_idle_cleanup=not self._premium,
         )
 
     @property
@@ -789,6 +797,7 @@ class CodebuffAccountPool:
         self._condition = asyncio.Condition()
         self._scheduler_task: asyncio.Task[None] | None = None
         self._idle_timers: dict[int, asyncio.Task[None]] = {}
+        self._block_watchers: dict[int, asyncio.Task[None]] = {}
 
     @property
     def account_count(self) -> int:
@@ -823,6 +832,9 @@ class CodebuffAccountPool:
         for timer in list(self._idle_timers.values()):
             timer.cancel()
         self._idle_timers.clear()
+        for watcher in list(self._block_watchers.values()):
+            watcher.cancel()
+        self._block_watchers.clear()
         await asyncio.gather(
             *(account.client.aclose() for account in self._accounts),
             return_exceptions=True,
@@ -888,13 +900,18 @@ class CodebuffAccountPool:
             )
             await self.release(account_index)
             raise
+        premium = self._settings.is_premium(model)
+        if premium:
+            self._note_premium_session(account_index, session_lease.session.instance_id)
+        else:
+            self._clear_premium(account_index)
         return CodebuffAccountLease(
             client=account.client,
             session=session_lease.session,
             _session_lease=session_lease,
             _pool=self,
             _account_index=account_index,
-            _premium=model not in self._settings.unlimited_models,
+            _premium=premium,
         )
 
     async def release(
@@ -1050,6 +1067,7 @@ class CodebuffAccountPool:
             f"t{account.client.settings.token_index}/{len(self._accounts)}", ""
         )
         deleted = await account.sessions.delete_session_if_any()
+        self._clear_premium(account_index)
         if deleted:
             logger.info(
                 "deleted freebuff session token=%s reason=%s",
@@ -1057,6 +1075,72 @@ class CodebuffAccountPool:
                 reason,
             )
         return deleted
+
+    def _note_premium_session(self, account_index: int, instance_id: str) -> None:
+        account = self._accounts[account_index]
+        if account.premium_instance_id == instance_id and account.holds_premium:
+            return  # same session reused; keep its billing-block timing
+        account.premium_instance_id = instance_id
+        account.premium_started = time.monotonic()
+        old = self._block_watchers.pop(account_index, None)
+        if old is not None:
+            old.cancel()
+        self._block_watchers[account_index] = asyncio.create_task(
+            self._premium_block_watcher(account_index, account.premium_started)
+        )
+        logger.info(
+            "premium session opened token=%s block=%ss",
+            account.client.settings.token_hint,
+            int(self._settings.session_block_seconds),
+        )
+
+    def _clear_premium(self, account_index: int) -> None:
+        account = self._accounts[account_index]
+        account.premium_started = None
+        account.premium_instance_id = None
+        watcher = self._block_watchers.pop(account_index, None)
+        if watcher is not None and watcher is not asyncio.current_task():
+            watcher.cancel()
+
+    async def _premium_block_watcher(self, account_index: int, start: float) -> None:
+        """Destroy the premium session near a 6-min billing-block boundary.
+
+        Upstream bills ceil(minutes / block) * 0.1, so the session is reused for
+        free within a block; we delete it ``destroy_lead`` seconds before the
+        block boundary when idle, deferring to the next block when busy.
+        """
+        account = self._accounts[account_index]
+        block = self._settings.session_block_seconds
+        lead = self._settings.destroy_lead_seconds
+        k = 1
+        while True:
+            if account.premium_started != start:
+                return
+            delay = (start + k * block - lead) - time.monotonic()
+            if delay > 0:
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    return
+            async with self._condition:
+                if account.premium_started != start:
+                    return
+                if account.busy:
+                    k += 1  # busy serving; defer to the next block window
+                    continue
+                account.busy = True  # reserve for destroy
+            try:
+                await self._delete_account_session(account_index, "block")
+            except CodebuffError as error:
+                logger.warning(
+                    "premium block destroy token=%s failed: %s",
+                    account.client.settings.token_hint,
+                    error,
+                    exc_info=self._settings.debug,
+                )
+            finally:
+                await self.release(account_index)
+            return
 
     def _cancel_idle_timer(self, account_index: int) -> None:
         timer = self._idle_timers.pop(account_index, None)
