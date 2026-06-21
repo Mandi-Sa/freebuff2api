@@ -58,8 +58,8 @@ FREEBUFF_TOKEN=token-a,token-b,token-c
 
 - **premium 请求**：锁定当前时段 token，繁忙只排队、不跨 token，也不跨模型；额度耗尽
   时直接返回 `premium quota exhausted ... resets at ...`。
-- **unlimited 请求**：当前时段 token 繁忙或正持有 premium 会话时，回退到其他空闲 token；
-  空闲超过 `FREEBUFF_SESSION_IDLE_TIMEOUT` 秒后删除其会话。
+- **unlimited 请求**：当前时段 token 繁忙或正持有 premium 会话时，回退到其他空闲 token。
+  unlimited 会话不计额度，保留复用，待窗口轮换或切换模型时再删除。
 
 ### premium 计费块复用
 

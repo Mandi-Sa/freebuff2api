@@ -293,7 +293,6 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="moonshotai/kimi-k2.6",
-            session_idle_timeout=0,
         )
         windows = iter([0, 1])
 
@@ -313,14 +312,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.client.settings.codebuff_token, "token-b")
         self.assertEqual(ParkingPoolClient.deleted_tokens, ["token-a"])
 
-    async def test_unlimited_request_schedules_idle_delete(self):
+    async def test_unlimited_request_keeps_session_no_idle_delete(self):
         IdlePoolClient.deleted = []
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="deepseek/deepseek-v4-pro",
             premium_model="moonshotai/kimi-k2.6",
-            session_idle_timeout=0.05,
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
@@ -331,18 +329,19 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
                 await lease.aclose()
                 await asyncio.sleep(0.2)
-                await pool.aclose()
+                try:
+                    # unlimited sessions are free; they are never idle-deleted
+                    self.assertEqual(IdlePoolClient.deleted, [])
+                finally:
+                    await pool.aclose()
 
-        self.assertEqual(IdlePoolClient.deleted, ["token-a"])
-
-    async def test_premium_request_not_idle_deleted_uses_block_watcher(self):
+    async def test_premium_request_not_deleted_before_block_window(self):
         IdlePoolClient.deleted = []
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="moonshotai/kimi-k2.6",
             premium_model="deepseek/deepseek-v4-pro",
-            session_idle_timeout=0.05,
             session_block_seconds=999,
             destroy_lead_seconds=0,
         )
@@ -355,7 +354,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 lease = await pool.acquire_session("deepseek/deepseek-v4-pro")
                 self.assertTrue(pool._accounts[0].holds_premium)
                 await lease.aclose()
-                await asyncio.sleep(0.2)  # past idle timeout, but premium is exempt
+                await asyncio.sleep(0.2)  # block window is far away
                 try:
                     self.assertEqual(IdlePoolClient.deleted, [])
                 finally:

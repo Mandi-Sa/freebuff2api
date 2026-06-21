@@ -43,7 +43,6 @@ class Settings:
     unlimited_model: str = "deepseek/deepseek-v4-flash"
     premium_model: str = "moonshotai/kimi-k2.6"
     schedule_utc_offset: float = -7.0
-    session_idle_timeout: float = 10.0
     session_block_seconds: float = 360.0
     destroy_lead_seconds: float = 45.0
     quota_file: str = "data/quota.json"
@@ -153,7 +152,6 @@ def load_settings() -> Settings:
         ),
         premium_model=os.getenv("FREEBUFF_PREMIUM_MODEL", "moonshotai/kimi-k2.6"),
         schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
-        session_idle_timeout=float(os.getenv("FREEBUFF_SESSION_IDLE_TIMEOUT", "10")),
         session_block_seconds=float(os.getenv("FREEBUFF_SESSION_BLOCK_SECONDS", "360")),
         destroy_lead_seconds=float(os.getenv("FREEBUFF_DESTROY_LEAD_SECONDS", "45")),
         quota_file=os.getenv("FREEBUFF_QUOTA_FILE", "data/quota.json"),

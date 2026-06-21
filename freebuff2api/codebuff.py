@@ -774,7 +774,6 @@ class CodebuffAccountLease:
     _session_lease: FreebuffSessionLease
     _pool: CodebuffAccountPool
     _account_index: int
-    _premium: bool = False
     _closed: bool = False
 
     async def aclose(self) -> None:
@@ -782,12 +781,7 @@ class CodebuffAccountLease:
             return
         self._closed = True
         await self._session_lease.aclose()
-        # premium sessions are torn down by the block watcher, not idle cleanup;
-        # unlimited sessions use the idle timeout.
-        await self._pool.release(
-            self._account_index,
-            schedule_idle_cleanup=not self._premium,
-        )
+        await self._pool.release(self._account_index)
 
     @property
     def account_index(self) -> int:
@@ -816,7 +810,6 @@ class CodebuffAccountPool:
         self._active_index: int | None = None
         self._condition = asyncio.Condition()
         self._scheduler_task: asyncio.Task[None] | None = None
-        self._idle_timers: dict[int, asyncio.Task[None]] = {}
         self._block_watchers: dict[int, asyncio.Task[None]] = {}
 
     @property
@@ -849,9 +842,6 @@ class CodebuffAccountPool:
             except asyncio.CancelledError:
                 pass
             self._scheduler_task = None
-        for timer in list(self._idle_timers.values()):
-            timer.cancel()
-        self._idle_timers.clear()
         for watcher in list(self._block_watchers.values()):
             watcher.cancel()
         self._block_watchers.clear()
@@ -920,8 +910,7 @@ class CodebuffAccountPool:
             )
             await self.release(account_index)
             raise
-        premium = self._settings.is_premium(model)
-        if premium:
+        if self._settings.is_premium(model):
             self._note_premium_session(account_index, session_lease.session.instance_id)
         else:
             self._clear_premium(account_index)
@@ -931,20 +920,12 @@ class CodebuffAccountPool:
             _session_lease=session_lease,
             _pool=self,
             _account_index=account_index,
-            _premium=premium,
         )
 
-    async def release(
-        self,
-        account_index: int,
-        *,
-        schedule_idle_cleanup: bool = False,
-    ) -> None:
+    async def release(self, account_index: int) -> None:
         async with self._condition:
             self._accounts[account_index].busy = False
             self._condition.notify(1)
-        if schedule_idle_cleanup:
-            self._schedule_idle_cleanup(account_index)
 
     async def _reserve_account(
         self,
@@ -973,7 +954,6 @@ class CodebuffAccountPool:
                 )
                 if account_index is not None:
                     self._accounts[account_index].busy = True
-                    self._cancel_idle_timer(account_index)
                     self._bind_token_context(account_index, allow_switch)
                     self._log_account_selected(account_index, model)
                     return account_index
@@ -1179,42 +1159,6 @@ class CodebuffAccountPool:
             finally:
                 await self.release(account_index)
             return
-
-    def _cancel_idle_timer(self, account_index: int) -> None:
-        timer = self._idle_timers.pop(account_index, None)
-        if timer is not None:
-            timer.cancel()
-
-    def _schedule_idle_cleanup(self, account_index: int) -> None:
-        timeout = self._settings.session_idle_timeout
-        if timeout <= 0:
-            return
-        self._cancel_idle_timer(account_index)
-        self._idle_timers[account_index] = asyncio.create_task(
-            self._idle_cleanup(account_index, timeout)
-        )
-
-    async def _idle_cleanup(self, account_index: int, timeout: float) -> None:
-        try:
-            await asyncio.sleep(timeout)
-        except asyncio.CancelledError:
-            return
-        async with self._condition:
-            if self._accounts[account_index].busy:
-                return
-            self._accounts[account_index].busy = True
-        try:
-            await self._delete_account_session(account_index, "idle")
-        except CodebuffError as error:
-            logger.warning(
-                "idle session cleanup token=%s failed: %s",
-                self._accounts[account_index].client.settings.token_hint,
-                error,
-                exc_info=self._settings.debug,
-            )
-        finally:
-            self._idle_timers.pop(account_index, None)
-            await self.release(account_index)
 
 
 def _token_window_index(now: datetime, account_count: int) -> int:
