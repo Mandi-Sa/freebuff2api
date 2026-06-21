@@ -164,6 +164,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             prepared_attempt=prepared,
             attempt_number=1,
             max_attempts=1,
+            request_id="test01",
         ):
             chunks.append(chunk.decode("utf-8"))
 
@@ -283,6 +284,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 prepared_attempt=prepared,
                 attempt_number=1,
                 max_attempts=1,
+                request_id="test02",
             ):
                 chunks.append(chunk.decode("utf-8"))
 
@@ -334,6 +336,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 prepared_attempt=prepared,
                 attempt_number=1,
                 max_attempts=2,
+                request_id="test03",
             ):
                 chunks.append(chunk.decode("utf-8"))
 

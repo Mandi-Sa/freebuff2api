@@ -20,7 +20,13 @@ from .codebuff import (
     utc_now_iso,
 )
 from .config import Settings, load_settings
-from .logging_config import configure_logging, redact_headers, render_debug
+from .logging_config import (
+    configure_logging,
+    redact_headers,
+    render_debug,
+    set_request_id,
+    set_token_context,
+)
 from .openai_compat import (
     CompletionAccumulator,
     build_upstream_payload,
@@ -129,6 +135,17 @@ def _error_token_hint(error: CodebuffError) -> str:
 
 def _max_account_attempts(request: Request) -> int:
     return max(1, _accounts(request).account_count)
+
+
+def _bind_lease_log_context(
+    request: Request,
+    lease: CodebuffAccountLease,
+    model_config: FreebuffModel,
+) -> None:
+    settings = _settings(request)
+    count = _accounts(request).account_count
+    mode = "U" if model_config.session_id in settings.unlimited_models else "P"
+    set_token_context(f"t{lease.client.settings.token_index}/{count}", mode)
 
 
 def _retry_log(
@@ -256,6 +273,8 @@ async def chat_completions(request: Request) -> Any:
     _check_local_auth(request)
     body = await request.json()
     settings = _settings(request)
+    request_id = uuid.uuid4().hex[:6]
+    set_request_id(request_id)
     try:
         model_config = resolve_model(body.get("model"))
     except ValueError as error:
@@ -316,6 +335,7 @@ async def chat_completions(request: Request) -> Any:
                     prepared_attempt=prepared,
                     attempt_number=attempt,
                     max_attempts=max_attempts,
+                    request_id=request_id,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -381,10 +401,13 @@ async def _stream_openai_chunks(
     prepared_attempt: PreparedChatAttempt,
     attempt_number: int,
     max_attempts: int,
+    request_id: str,
 ) -> AsyncIterator[bytes]:
     settings = _settings(request)
     attempt = attempt_number
     current = prepared_attempt
+    set_request_id(request_id)
+    _bind_lease_log_context(request, current.lease, model_config)
     excluded_accounts = {current.lease.account_index}
 
     while True:

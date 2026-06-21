@@ -11,7 +11,12 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import HAR_BROWSER_USER_AGENT, Settings
-from .logging_config import mode_tag, redact_headers, render_debug
+from .logging_config import (
+    redact_headers,
+    render_debug,
+    set_request_id,
+    set_token_context,
+)
 from .models import agent_validation_payload
 
 
@@ -866,7 +871,8 @@ class CodebuffAccountPool:
                 )
                 if account_index is not None:
                     self._accounts[account_index].busy = True
-                    self._log_account_selected(account_index, model, allow_switch)
+                    self._bind_token_context(account_index, allow_switch)
+                    self._log_account_selected(account_index, model)
                     return account_index
                 if not waiting_logged:
                     self._log_account_busy(model, allow_switch)
@@ -890,37 +896,26 @@ class CodebuffAccountPool:
                 return account_index
         return None
 
-    def _mode_tag(self, allow_switch: bool) -> str:
-        label = "UNLIMITED" if allow_switch else "PREMIUM"
-        return mode_tag(label, color=self._settings.log_color)
+    def _bind_token_context(self, account_index: int, allow_switch: bool) -> None:
+        token_index = self._accounts[account_index].client.settings.token_index
+        set_token_context(
+            f"t{token_index}/{len(self._accounts)}",
+            "U" if allow_switch else "P",
+        )
 
-    def _log_account_selected(
-        self,
-        account_index: int,
-        model: str,
-        allow_switch: bool,
-    ) -> None:
-        account_count = len(self._accounts)
+    def _log_account_selected(self, account_index: int, model: str) -> None:
         active_index = self._active_index or 0
         client_settings = self._accounts[account_index].client.settings
-        tag = self._mode_tag(allow_switch)
         if account_index == active_index:
             logger.info(
-                "%s using freebuff token_index=%s/%s token=%s model=%s",
-                tag,
-                client_settings.token_index,
-                account_count,
+                "using freebuff token=%s model=%s",
                 client_settings.token_hint,
                 model,
             )
             return
         active_settings = self._accounts[active_index].client.settings
         logger.info(
-            "%s using fallback freebuff token_index=%s/%s token=%s "
-            "(current window token_index=%s busy) model=%s",
-            tag,
-            client_settings.token_index,
-            account_count,
+            "using fallback freebuff token=%s (current window token_index=%s busy) model=%s",
             client_settings.token_hint,
             active_settings.token_index,
             model,
@@ -929,18 +924,15 @@ class CodebuffAccountPool:
     def _log_account_busy(self, model: str, allow_switch: bool) -> None:
         active_index = self._active_index or 0
         active_settings = self._accounts[active_index].client.settings
-        tag = self._mode_tag(allow_switch)
         if allow_switch:
             logger.info(
-                "%s freebuff all tokens busy; waiting for a free token model=%s",
-                tag,
+                "freebuff all tokens busy; waiting for a free token model=%s",
                 model,
             )
             return
         logger.info(
-            "%s freebuff current window token_index=%s/%s token=%s reached concurrency "
+            "freebuff current window token_index=%s/%s token=%s reached concurrency "
             "limit; switching disabled, waiting model=%s",
-            tag,
             active_settings.token_index,
             len(self._accounts),
             active_settings.token_hint,
@@ -990,6 +982,8 @@ class CodebuffAccountPool:
 
     async def _park_account(self, account_index: int, model: str) -> None:
         account = self._accounts[account_index]
+        set_request_id("park")
+        self._bind_token_context(account_index, allow_switch=True)
         lease = await account.sessions.acquire_session(model)
         try:
             logger.info(

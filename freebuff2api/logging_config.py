@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import sys
@@ -7,7 +8,7 @@ from typing import Any
 
 from .config import Settings
 
-LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(ctx)s%(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 RESET = "\033[0m"
@@ -19,24 +20,57 @@ COLORS = {
     logging.CRITICAL: "\033[35m",
 }
 
-MODE_BADGES = {
-    "UNLIMITED": "\033[1;37;42m",  # bold white on green background
-    "PREMIUM": "\033[1;30;43m",  # bold black on yellow background
+# Per-request correlation fields injected into every log line so concurrent
+# requests can be told apart at a glance.
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "freebuff_request_id", default=""
+)
+token_label_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "freebuff_token_label", default=""
+)
+mode_label_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "freebuff_mode_label", default=""
+)
+
+MODE_COLORS = {
+    "U": "\033[1;32m",  # bold green  -> UNLIMITED
+    "P": "\033[1;33m",  # bold yellow -> PREMIUM
 }
 
 
-def mode_tag(label: str, *, color: bool) -> str:
-    """Render an eye-catching ``[LABEL]`` badge for the token-selection mode.
+def set_request_id(request_id: str) -> None:
+    request_id_var.set(request_id)
 
-    With color enabled the badge is a bright background block; the trailing
-    sequence re-opens the INFO color so the rest of the line keeps its level
-    color. Without color it degrades to a plain ``[LABEL]`` tag.
-    """
-    text = f"[{label.center(9)}]"
-    badge = MODE_BADGES.get(label)
-    if not color or not badge:
-        return text
-    return f"{badge}{text}{RESET}{COLORS[logging.INFO]}"
+
+def set_token_context(token_label: str, mode_label: str) -> None:
+    token_label_var.set(token_label)
+    mode_label_var.set(mode_label)
+
+
+class ContextFilter(logging.Filter):
+    """Inject the ``[request token mode]`` prefix into every record."""
+
+    def __init__(self, color: bool) -> None:
+        super().__init__()
+        self._color = color
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        parts = [
+            part
+            for part in (request_id_var.get(""), token_label_var.get(""))
+            if part
+        ]
+        mode = mode_label_var.get("")
+        if mode:
+            parts.append(self._mode(mode))
+        record.ctx = f"[{' '.join(parts)}] " if parts else ""
+        return True
+
+    def _mode(self, mode: str) -> str:
+        tint = MODE_COLORS.get(mode) if self._color else None
+        if not tint:
+            return mode
+        return f"{tint}{mode}{RESET}{COLORS[logging.INFO]}"
 
 
 class ColorFormatter(logging.Formatter):
@@ -52,6 +86,7 @@ def configure_logging(settings: Settings) -> None:
     handler = logging.StreamHandler(sys.stdout)
     formatter_cls = ColorFormatter if settings.log_color else logging.Formatter
     handler.setFormatter(formatter_cls(LOG_FORMAT, datefmt=DATE_FORMAT))
+    handler.addFilter(ContextFilter(settings.log_color))
 
     root = logging.getLogger()
     root.handlers.clear()
