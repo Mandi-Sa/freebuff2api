@@ -136,6 +136,9 @@ class FailingPoolClient(PoolClient):
     async def request_ad_chain(self, messages=None, *, surface=None) -> None:
         return None
 
+    async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
+        return {"ads": []}
+
     async def create_session(self, model):
         raise CodebuffError("Codebuff request failed: 429 rate_limited", 429)
 
