@@ -349,6 +349,29 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     await first.aclose()
                     await pool.aclose()
 
+    async def test_unlimited_model_whitelist_allows_each_listed_model(self):
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6, minimax/minimax-m3",
+        )
+        self.assertEqual(settings.park_model, "moonshotai/kimi-k2.6")
+
+        with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                first = await pool.acquire_session("minimax/minimax-m3")
+                second = await pool.acquire_session("minimax/minimax-m3")
+                try:
+                    self.assertEqual(first.client.settings.codebuff_token, "token-a")
+                    self.assertEqual(second.client.settings.codebuff_token, "token-b")
+                finally:
+                    await second.aclose()
+                    await first.aclose()
+                    await pool.aclose()
+
     def test_seconds_until_next_window_counts_down_to_boundary(self):
         with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
             pool = CodebuffAccountPool(

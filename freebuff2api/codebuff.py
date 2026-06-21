@@ -846,7 +846,7 @@ class CodebuffAccountPool:
     ) -> int:
         if len(exclude_account_indices) >= len(self._accounts):
             raise CodebuffError("No remaining accounts available for retry", 503)
-        allow_switch = model == self._settings.unlimited_model
+        allow_switch = model in self._settings.unlimited_models
         async with self._condition:
             self._refresh_active_window()
             active_index = self._active_index or 0
@@ -949,7 +949,7 @@ class CodebuffAccountPool:
         self._schedule_park(previous_index)
 
     def _schedule_park(self, account_index: int) -> None:
-        model = self._settings.unlimited_model
+        model = self._settings.park_model
         if not model:
             return
         account = self._accounts[account_index]

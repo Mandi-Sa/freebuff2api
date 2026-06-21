@@ -65,6 +65,16 @@ class Settings:
         return tuple(item for item in values if item)
 
     @property
+    def unlimited_models(self) -> tuple[str, ...]:
+        values = [item.strip() for item in self.unlimited_model.split(",")]
+        return tuple(item for item in values if item)
+
+    @property
+    def park_model(self) -> str | None:
+        models = self.unlimited_models
+        return models[0] if models else None
+
+    @property
     def token_hint(self) -> str:
         if not self.codebuff_token:
             return "no-token"

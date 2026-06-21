@@ -45,10 +45,11 @@ token 的会话切到 `FREEBUFF_UNLIMITED_MODEL` 指定的 UNLIMITED 模型。
 
 token 选择规则：
 
-- 请求 UNLIMITED 模型时，当前时段 token 繁忙可回退到其他空闲 token（日志
-  `using fallback freebuff token_index=...`）。
-- 请求非 UNLIMITED 模型时，只允许使用当前时段的 token，繁忙也不切换、只排队等待
-  （日志 `current window token ... reached concurrency limit ... waiting`）。
+- 请求命中 `FREEBUFF_UNLIMITED_MODEL` 白名单（逗号分隔，可多个）的模型时，当前时段
+  token 繁忙可回退到其他空闲 token（日志 `using fallback freebuff token_index=...`）。
+- 请求其他模型（含各 PRO 模型）时，只允许使用当前时段的 token，繁忙也不切换、只排队
+  等待（日志 `current window token ... reached concurrency limit ... waiting`）。
+- 分时切换 token 时，会把上一个 token 的会话切到白名单的第一个模型。
 
 日志会打印当前正在使用第几个 token（`using freebuff token_index=2/3 ...`）以及窗口切换
 （`freebuff token window switch ...`）。
