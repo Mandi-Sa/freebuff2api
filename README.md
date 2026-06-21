@@ -40,9 +40,18 @@ FREEBUFF_TOKEN=token-a,token-b,token-c
 ```
 
 多账号还会按一天 24 小时平均分时使用：N 个 token 时，每个 token 使用
-`24 / N` 小时后切换到下一个；切换时会把上一个 token 的会话切到
-`FREEBUFF_UNLIMITED_MODEL` 指定的 UNLIMITED 模型。日志会打印当前正在使用第几个
-token（`using freebuff token_index=2/3 ...`）。
+`24 / N` 小时后切换到下一个；即使没有请求，后台也会在窗口边界按点切换，并把上一个
+token 的会话切到 `FREEBUFF_UNLIMITED_MODEL` 指定的 UNLIMITED 模型。
+
+token 选择规则：
+
+- 请求 UNLIMITED 模型时，当前时段 token 繁忙可回退到其他空闲 token（日志
+  `using fallback freebuff token_index=...`）。
+- 请求非 UNLIMITED 模型时，只允许使用当前时段的 token，繁忙也不切换、只排队等待
+  （日志 `current window token ... reached concurrency limit ... waiting`）。
+
+日志会打印当前正在使用第几个 token（`using freebuff token_index=2/3 ...`）以及窗口切换
+（`freebuff token window switch ...`）。
 
 复制 `.env.example` 为 `.env`，然后填写上游 token：
 

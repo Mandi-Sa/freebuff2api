@@ -292,6 +292,81 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.client.settings.codebuff_token, "token-b")
         self.assertEqual(ParkingPoolClient.parked_models, ["moonshotai/kimi-k2.6"])
 
+    async def test_non_unlimited_model_waits_for_current_token_without_switching(self):
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6",
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                first = await pool.acquire_session("deepseek/deepseek-v4-flash")
+                started = asyncio.Event()
+
+                async def acquire_second():
+                    started.set()
+                    return await pool.acquire_session("deepseek/deepseek-v4-flash")
+
+                task = asyncio.create_task(acquire_second())
+                await started.wait()
+                await asyncio.sleep(0.05)
+                try:
+                    self.assertFalse(task.done())
+                    self.assertEqual(first.client.settings.codebuff_token, "token-a")
+                    await first.aclose()
+                    second = await asyncio.wait_for(task, timeout=1)
+                    self.assertEqual(
+                        second.client.settings.codebuff_token, "token-a"
+                    )
+                    await second.aclose()
+                finally:
+                    await pool.aclose()
+
+    async def test_unlimited_model_switches_to_other_token_when_busy(self):
+        ParkingPoolClient.parked_models = []
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6",
+        )
+
+        with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index", lambda now, count: 0
+            ):
+                pool = CodebuffAccountPool(settings)
+                first = await pool.acquire_session("moonshotai/kimi-k2.6")
+                second = await pool.acquire_session("moonshotai/kimi-k2.6")
+                try:
+                    self.assertEqual(first.client.settings.codebuff_token, "token-a")
+                    self.assertEqual(second.client.settings.codebuff_token, "token-b")
+                finally:
+                    await second.aclose()
+                    await first.aclose()
+                    await pool.aclose()
+
+    def test_seconds_until_next_window_counts_down_to_boundary(self):
+        with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
+            pool = CodebuffAccountPool(
+                Settings(codebuff_token="a,b,c,d,e", local_api_key=None)
+            )
+        # 5 tokens -> 4.8h windows; 04:48 is the boundary into token 2.
+        self.assertAlmostEqual(
+            pool._seconds_until_next_window(datetime(2026, 6, 21, 4, 47, 30)),
+            30.0 + 0.5,
+            places=3,
+        )
+        # Just past midnight: next boundary is the end of token 1's window.
+        self.assertAlmostEqual(
+            pool._seconds_until_next_window(datetime(2026, 6, 21, 0, 0, 0)),
+            17280.0 + 0.5,
+            places=3,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

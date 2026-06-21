@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.accounts = accounts
     app.state.codebuff = accounts.default_client
     app.state.sessions = accounts.default_sessions
+    accounts.start_scheduler()
     logger.info("configured freebuff accounts count=%s", accounts.account_count)
     try:
         yield

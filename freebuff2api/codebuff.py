@@ -736,6 +736,7 @@ class CodebuffAccountPool:
             )
         self._active_index: int | None = None
         self._condition = asyncio.Condition()
+        self._scheduler_task: asyncio.Task[None] | None = None
 
     @property
     def account_count(self) -> int:
@@ -749,11 +750,44 @@ class CodebuffAccountPool:
     def default_sessions(self) -> SessionManager:
         return self._accounts[0].sessions
 
+    def start_scheduler(self) -> None:
+        """Switch the active token window on time, even without traffic."""
+        if len(self._accounts) <= 1 or self._scheduler_task is not None:
+            return
+        self._scheduler_task = asyncio.create_task(self._run_scheduler())
+
     async def aclose(self) -> None:
+        if self._scheduler_task is not None:
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
+            self._scheduler_task = None
         await asyncio.gather(
             *(account.client.aclose() for account in self._accounts),
             return_exceptions=True,
         )
+
+    async def _run_scheduler(self) -> None:
+        while True:
+            await asyncio.sleep(self._seconds_until_next_window(datetime.now()))
+            try:
+                async with self._condition:
+                    self._refresh_active_window()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("freebuff token window scheduler tick failed")
+
+    def _seconds_until_next_window(self, now: datetime) -> float:
+        window_seconds = 86_400 / len(self._accounts)
+        seconds_into_day = (
+            now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
+        )
+        current_window = int(seconds_into_day / window_seconds)
+        next_boundary = (current_window + 1) * window_seconds
+        return max(next_boundary - seconds_into_day, 0.0) + 0.5
 
     async def acquire_session(
         self,
@@ -762,7 +796,7 @@ class CodebuffAccountPool:
         *,
         exclude_account_indices: set[int] | None = None,
     ) -> CodebuffAccountLease:
-        account_index = await self._reserve_account(exclude_account_indices or set())
+        account_index = await self._reserve_account(model, exclude_account_indices or set())
         account = self._accounts[account_index]
         try:
             session_lease = await account.sessions.acquire_session(model, messages)
@@ -805,35 +839,96 @@ class CodebuffAccountPool:
             self._accounts[account_index].busy = False
             self._condition.notify(1)
 
-    async def _reserve_account(self, exclude_account_indices: set[int]) -> int:
+    async def _reserve_account(
+        self,
+        model: str,
+        exclude_account_indices: set[int],
+    ) -> int:
         if len(exclude_account_indices) >= len(self._accounts):
             raise CodebuffError("No remaining accounts available for retry", 503)
+        allow_switch = model == self._settings.unlimited_model
         async with self._condition:
             self._refresh_active_window()
+            active_index = self._active_index or 0
+            if not allow_switch and active_index in exclude_account_indices:
+                active_settings = self._accounts[active_index].client.settings
+                raise CodebuffError(
+                    "current window token_index="
+                    f"{active_settings.token_index} unavailable and switching is "
+                    f"disabled for non-unlimited model {model}",
+                    503,
+                )
+            waiting_logged = False
             while True:
-                account_index = self._next_available_index(exclude_account_indices)
+                account_index = self._next_available_index(
+                    exclude_account_indices,
+                    allow_switch=allow_switch,
+                )
                 if account_index is not None:
                     self._accounts[account_index].busy = True
-                    client_settings = self._accounts[account_index].client.settings
-                    logger.info(
-                        "using freebuff token_index=%s/%s token=%s",
-                        client_settings.token_index,
-                        len(self._accounts),
-                        client_settings.token_hint,
-                    )
+                    self._log_account_selected(account_index)
                     return account_index
+                if not waiting_logged:
+                    self._log_account_busy(model, allow_switch)
+                    waiting_logged = True
                 await self._condition.wait()
 
-    def _next_available_index(self, exclude_account_indices: set[int]) -> int | None:
+    def _next_available_index(
+        self,
+        exclude_account_indices: set[int],
+        *,
+        allow_switch: bool = True,
+    ) -> int | None:
         account_count = len(self._accounts)
         start = self._active_index or 0
-        for offset in range(account_count):
+        span = account_count if allow_switch else 1
+        for offset in range(span):
             account_index = (start + offset) % account_count
             if account_index in exclude_account_indices:
                 continue
             if not self._accounts[account_index].busy:
                 return account_index
         return None
+
+    def _log_account_selected(self, account_index: int) -> None:
+        account_count = len(self._accounts)
+        active_index = self._active_index or 0
+        client_settings = self._accounts[account_index].client.settings
+        if account_index == active_index:
+            logger.info(
+                "using freebuff token_index=%s/%s token=%s",
+                client_settings.token_index,
+                account_count,
+                client_settings.token_hint,
+            )
+            return
+        active_settings = self._accounts[active_index].client.settings
+        logger.info(
+            "using fallback freebuff token_index=%s/%s token=%s "
+            "(current window token_index=%s busy, unlimited model)",
+            client_settings.token_index,
+            account_count,
+            client_settings.token_hint,
+            active_settings.token_index,
+        )
+
+    def _log_account_busy(self, model: str, allow_switch: bool) -> None:
+        active_index = self._active_index or 0
+        active_settings = self._accounts[active_index].client.settings
+        if allow_switch:
+            logger.info(
+                "freebuff all tokens busy; waiting for a free token model=%s",
+                model,
+            )
+            return
+        logger.info(
+            "freebuff current window token_index=%s/%s token=%s reached concurrency "
+            "limit; switching disabled for non-unlimited model=%s, waiting",
+            active_settings.token_index,
+            len(self._accounts),
+            active_settings.token_hint,
+            model,
+        )
 
     def _refresh_active_window(self) -> None:
         account_count = len(self._accounts)
