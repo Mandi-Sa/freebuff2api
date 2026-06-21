@@ -718,6 +718,7 @@ class CodebuffAccountLease:
 
 class CodebuffAccountPool:
     def __init__(self, settings: Settings) -> None:
+        self._settings = settings
         tokens = settings.codebuff_tokens or (None,)
         self._accounts: list[CodebuffAccount] = []
         for index, token in enumerate(tokens, start=1):
@@ -733,7 +734,7 @@ class CodebuffAccountPool:
                     sessions=SessionManager(client, account_settings),
                 )
             )
-        self._next_index = 0
+        self._active_index: int | None = None
         self._condition = asyncio.Condition()
 
     @property
@@ -808,23 +809,99 @@ class CodebuffAccountPool:
         if len(exclude_account_indices) >= len(self._accounts):
             raise CodebuffError("No remaining accounts available for retry", 503)
         async with self._condition:
+            self._refresh_active_window()
             while True:
                 account_index = self._next_available_index(exclude_account_indices)
                 if account_index is not None:
                     self._accounts[account_index].busy = True
-                    self._next_index = (account_index + 1) % len(self._accounts)
+                    client_settings = self._accounts[account_index].client.settings
+                    logger.info(
+                        "using freebuff token_index=%s/%s token=%s",
+                        client_settings.token_index,
+                        len(self._accounts),
+                        client_settings.token_hint,
+                    )
                     return account_index
                 await self._condition.wait()
 
     def _next_available_index(self, exclude_account_indices: set[int]) -> int | None:
         account_count = len(self._accounts)
+        start = self._active_index or 0
         for offset in range(account_count):
-            account_index = (self._next_index + offset) % account_count
+            account_index = (start + offset) % account_count
             if account_index in exclude_account_indices:
                 continue
             if not self._accounts[account_index].busy:
                 return account_index
         return None
+
+    def _refresh_active_window(self) -> None:
+        account_count = len(self._accounts)
+        new_index = _token_window_index(datetime.now(), account_count)
+        if self._active_index is None:
+            self._active_index = new_index
+            return
+        if new_index == self._active_index:
+            return
+        previous_index = self._active_index
+        self._active_index = new_index
+        logger.info(
+            "freebuff token window switch previous_token_index=%s next_token_index=%s/%s",
+            self._accounts[previous_index].client.settings.token_index,
+            self._accounts[new_index].client.settings.token_index,
+            account_count,
+        )
+        self._schedule_park(previous_index)
+
+    def _schedule_park(self, account_index: int) -> None:
+        model = self._settings.unlimited_model
+        if not model:
+            return
+        account = self._accounts[account_index]
+        task = asyncio.create_task(self._park_account(account_index, model))
+
+        def _log_park_error(done: asyncio.Task[None]) -> None:
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.warning(
+                    "parking token_index=%s token=%s on unlimited model=%s failed",
+                    account.client.settings.token_index,
+                    account.client.settings.token_hint,
+                    model,
+                    exc_info=account.client.settings.debug,
+                )
+
+        task.add_done_callback(_log_park_error)
+
+    async def _park_account(self, account_index: int, model: str) -> None:
+        account = self._accounts[account_index]
+        lease = await account.sessions.acquire_session(model)
+        try:
+            logger.info(
+                "parked token_index=%s token=%s on unlimited model=%s instance_id=%s",
+                account.client.settings.token_index,
+                account.client.settings.token_hint,
+                model,
+                lease.session.instance_id,
+            )
+        finally:
+            await lease.aclose()
+
+
+def _token_window_index(now: datetime, account_count: int) -> int:
+    """Map the current local time of day to a token index.
+
+    The 24h day is split into ``account_count`` equal windows so each token is
+    used for ``24 / account_count`` hours before switching to the next one.
+    """
+    if account_count <= 1:
+        return 0
+    seconds_into_day = now.hour * 3600 + now.minute * 60 + now.second
+    window_seconds = 86_400 / account_count
+    return min(int(seconds_into_day / window_seconds), account_count - 1)
 
 
 def utc_now_iso() -> str:

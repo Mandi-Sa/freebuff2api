@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from freebuff2api.codebuff import (
@@ -7,6 +8,7 @@ from freebuff2api.codebuff import (
     CodebuffError,
     FreebuffSession,
     SessionManager,
+    _token_window_index,
 )
 from freebuff2api.config import Settings
 
@@ -137,6 +139,24 @@ class FailingPoolClient(PoolClient):
         raise CodebuffError("Codebuff request failed: 429 rate_limited", 429)
 
 
+class ParkingPoolClient(PoolClient):
+    parked_models: list[str] = []
+
+    async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
+        return {"ads": []}
+
+    async def delete_session(self) -> None:
+        return None
+
+    async def create_session(self, model):
+        ParkingPoolClient.parked_models.append(model)
+        return FreebuffSession(
+            instance_id=f"{model}-instance",
+            model=model,
+            remaining_ms=3_000_000,
+        )
+
+
 class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_switch_model_deletes_active_upstream_session_before_create(self):
         client = SwitchModelClient()
@@ -206,8 +226,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             first = await pool.acquire_session("deepseek/deepseek-v4-flash")
             second = await pool.acquire_session("deepseek/deepseek-v4-flash")
             try:
-                self.assertEqual(first.client.settings.codebuff_token, "token-a")
-                self.assertEqual(second.client.settings.codebuff_token, "token-b")
+                self.assertEqual(
+                    {
+                        first.client.settings.codebuff_token,
+                        second.client.settings.codebuff_token,
+                    },
+                    {"token-a", "token-b"},
+                )
                 self.assertNotEqual(
                     first.session.instance_id,
                     second.session.instance_id,
@@ -235,6 +260,37 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("token_index=1", logs.output[0])
         self.assertIn("token=***1234", logs.output[0])
         self.assertIn("429 rate_limited", logs.output[0])
+
+    def test_token_window_index_splits_day_evenly(self):
+        self.assertEqual(_token_window_index(datetime(2026, 6, 21, 0, 0, 0), 5), 0)
+        self.assertEqual(_token_window_index(datetime(2026, 6, 21, 5, 0, 0), 5), 1)
+        self.assertEqual(_token_window_index(datetime(2026, 6, 21, 23, 59, 59), 5), 4)
+        self.assertEqual(_token_window_index(datetime(2026, 6, 21, 12, 0, 0), 1), 0)
+
+    async def test_window_switch_parks_previous_token_on_unlimited_model(self):
+        ParkingPoolClient.parked_models = []
+        settings = Settings(
+            codebuff_token="token-a,token-b",
+            local_api_key=None,
+            unlimited_model="moonshotai/kimi-k2.6",
+        )
+        windows = iter([0, 1])
+
+        with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):
+            with patch(
+                "freebuff2api.codebuff._token_window_index",
+                lambda now, count: next(windows),
+            ):
+                pool = CodebuffAccountPool(settings)
+                first = await pool.acquire_session("deepseek/deepseek-v4-flash")
+                await first.aclose()
+                second = await pool.acquire_session("deepseek/deepseek-v4-flash")
+                await second.aclose()
+                await asyncio.sleep(0.05)
+                await pool.aclose()
+
+        self.assertEqual(second.client.settings.codebuff_token, "token-b")
+        self.assertEqual(ParkingPoolClient.parked_models, ["moonshotai/kimi-k2.6"])
 
 
 if __name__ == "__main__":

@@ -39,6 +39,7 @@ class Settings:
     timezone: str = "Asia/Shanghai"
     locale: str = "zh-CN"
     os_name: str = "windows"
+    unlimited_model: str = "deepseek/deepseek-v4-flash"
 
     @property
     def codebuff_api_url(self) -> str:
@@ -122,4 +123,7 @@ def load_settings() -> Settings:
         timezone=os.getenv("FREEBUFF_TIMEZONE", "Asia/Shanghai"),
         locale=os.getenv("FREEBUFF_LOCALE", "zh-CN"),
         os_name=os.getenv("FREEBUFF_OS", "windows"),
+        unlimited_model=os.getenv(
+            "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
+        ),
     )
