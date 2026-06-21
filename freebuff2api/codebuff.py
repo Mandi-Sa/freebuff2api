@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import HAR_BROWSER_USER_AGENT, Settings
-from .logging_config import redact_headers, render_debug
+from .logging_config import mode_tag, redact_headers, render_debug
 from .models import agent_validation_payload
 
 
@@ -866,7 +866,7 @@ class CodebuffAccountPool:
                 )
                 if account_index is not None:
                     self._accounts[account_index].busy = True
-                    self._log_account_selected(account_index)
+                    self._log_account_selected(account_index, model, allow_switch)
                     return account_index
                 if not waiting_logged:
                     self._log_account_busy(model, allow_switch)
@@ -890,40 +890,57 @@ class CodebuffAccountPool:
                 return account_index
         return None
 
-    def _log_account_selected(self, account_index: int) -> None:
+    def _mode_tag(self, allow_switch: bool) -> str:
+        label = "UNLIMITED" if allow_switch else "PREMIUM"
+        return mode_tag(label, color=self._settings.log_color)
+
+    def _log_account_selected(
+        self,
+        account_index: int,
+        model: str,
+        allow_switch: bool,
+    ) -> None:
         account_count = len(self._accounts)
         active_index = self._active_index or 0
         client_settings = self._accounts[account_index].client.settings
+        tag = self._mode_tag(allow_switch)
         if account_index == active_index:
             logger.info(
-                "using freebuff token_index=%s/%s token=%s",
+                "%s using freebuff token_index=%s/%s token=%s model=%s",
+                tag,
                 client_settings.token_index,
                 account_count,
                 client_settings.token_hint,
+                model,
             )
             return
         active_settings = self._accounts[active_index].client.settings
         logger.info(
-            "using fallback freebuff token_index=%s/%s token=%s "
-            "(current window token_index=%s busy, unlimited model)",
+            "%s using fallback freebuff token_index=%s/%s token=%s "
+            "(current window token_index=%s busy) model=%s",
+            tag,
             client_settings.token_index,
             account_count,
             client_settings.token_hint,
             active_settings.token_index,
+            model,
         )
 
     def _log_account_busy(self, model: str, allow_switch: bool) -> None:
         active_index = self._active_index or 0
         active_settings = self._accounts[active_index].client.settings
+        tag = self._mode_tag(allow_switch)
         if allow_switch:
             logger.info(
-                "freebuff all tokens busy; waiting for a free token model=%s",
+                "%s freebuff all tokens busy; waiting for a free token model=%s",
+                tag,
                 model,
             )
             return
         logger.info(
-            "freebuff current window token_index=%s/%s token=%s reached concurrency "
-            "limit; switching disabled for non-unlimited model=%s, waiting",
+            "%s freebuff current window token_index=%s/%s token=%s reached concurrency "
+            "limit; switching disabled, waiting model=%s",
+            tag,
             active_settings.token_index,
             len(self._accounts),
             active_settings.token_hint,

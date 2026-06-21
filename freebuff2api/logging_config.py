@@ -19,6 +19,25 @@ COLORS = {
     logging.CRITICAL: "\033[35m",
 }
 
+MODE_BADGES = {
+    "UNLIMITED": "\033[1;37;42m",  # bold white on green background
+    "PREMIUM": "\033[1;30;43m",  # bold black on yellow background
+}
+
+
+def mode_tag(label: str, *, color: bool) -> str:
+    """Render an eye-catching ``[LABEL]`` badge for the token-selection mode.
+
+    With color enabled the badge is a bright background block; the trailing
+    sequence re-opens the INFO color so the rest of the line keeps its level
+    color. Without color it degrades to a plain ``[LABEL]`` tag.
+    """
+    text = f"[{label.center(9)}]"
+    badge = MODE_BADGES.get(label)
+    if not color or not badge:
+        return text
+    return f"{badge}{text}{RESET}{COLORS[logging.INFO]}"
+
 
 class ColorFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
