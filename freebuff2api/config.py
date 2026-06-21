@@ -41,8 +41,12 @@ class Settings:
     locale: str = "zh-CN"
     os_name: str = "windows"
     unlimited_model: str = "deepseek/deepseek-v4-flash"
+    premium_model: str = "moonshotai/kimi-k2.6"
     schedule_utc_offset: float = -7.0
     session_idle_timeout: float = 10.0
+    session_block_seconds: float = 360.0
+    destroy_lead_seconds: float = 45.0
+    quota_file: str = "data/quota.json"
 
     @property
     def codebuff_api_url(self) -> str:
@@ -71,6 +75,15 @@ class Settings:
     def unlimited_models(self) -> tuple[str, ...]:
         values = [item.strip() for item in self.unlimited_model.split(",")]
         return tuple(item for item in values if item)
+
+    def is_premium(self, model: str) -> bool:
+        return model == self.premium_model
+
+    def is_unlimited(self, model: str) -> bool:
+        return model in self.unlimited_models
+
+    def is_allowed(self, model: str) -> bool:
+        return self.is_premium(model) or self.is_unlimited(model)
 
     @property
     def schedule_timezone(self) -> timezone:
@@ -138,6 +151,10 @@ def load_settings() -> Settings:
         unlimited_model=os.getenv(
             "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
         ),
+        premium_model=os.getenv("FREEBUFF_PREMIUM_MODEL", "moonshotai/kimi-k2.6"),
         schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
         session_idle_timeout=float(os.getenv("FREEBUFF_SESSION_IDLE_TIMEOUT", "10")),
+        session_block_seconds=float(os.getenv("FREEBUFF_SESSION_BLOCK_SECONDS", "360")),
+        destroy_lead_seconds=float(os.getenv("FREEBUFF_DESTROY_LEAD_SECONDS", "45")),
+        quota_file=os.getenv("FREEBUFF_QUOTA_FILE", "data/quota.json"),
     )
