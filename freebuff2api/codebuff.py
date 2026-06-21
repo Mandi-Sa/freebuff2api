@@ -18,6 +18,7 @@ from .logging_config import (
     set_token_context,
 )
 from .models import agent_validation_payload
+from .quota import QuotaStore
 
 
 logger = logging.getLogger("freebuff2api.codebuff")
@@ -88,8 +89,13 @@ class FreebuffSessionLease:
 
 
 class CodebuffClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        quota_store: QuotaStore | None = None,
+    ) -> None:
         self.settings = settings
+        self.quota_store = quota_store
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.request_timeout, read=None),
             follow_redirects=True,
@@ -98,6 +104,30 @@ class CodebuffClient:
         )
         self._agents_validated = False
         self._validate_lock = asyncio.Lock()
+
+    def _record_quota(self, data: dict[str, Any]) -> None:
+        store = self.quota_store
+        if store is None or not isinstance(data, dict):
+            return
+        entry = None
+        by_model = data.get("rateLimitsByModel")
+        if isinstance(by_model, dict):
+            entry = by_model.get(self.settings.premium_model)
+        if not isinstance(entry, dict):
+            rate_limit = data.get("rateLimit")
+            if isinstance(rate_limit, dict) and rate_limit.get("model") == (
+                self.settings.premium_model
+            ):
+                entry = rate_limit
+        if not isinstance(entry, dict):
+            return
+        store.record(
+            token_index=self.settings.token_index,
+            token_hint=self.settings.token_hint,
+            used=entry.get("recentCount"),
+            limit=entry.get("limit"),
+            reset_at=entry.get("resetAt"),
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -211,11 +241,13 @@ class CodebuffClient:
         headers_extra = {}
         if instance_id:
             headers_extra["x-freebuff-instance-id"] = instance_id
-        return await self._json(
+        data = await self._json(
             "GET",
             "/api/v1/freebuff/session",
             headers=self._headers(extra=headers_extra),
         )
+        self._record_quota(data)
+        return data
 
     async def create_session(self, model: str) -> FreebuffSession:
         data = await self._json(
@@ -223,6 +255,7 @@ class CodebuffClient:
             "/api/v1/freebuff/session",
             headers=self._headers(extra={"x-freebuff-model": model}),
         )
+        self._record_quota(data)
         if data.get("status") == "queued":
             return await self._wait_for_active_session(data, model)
         return self._session_from_data(data, model)
@@ -736,6 +769,7 @@ class CodebuffAccountLease:
 class CodebuffAccountPool:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._quota = QuotaStore(settings.quota_file)
         tokens = settings.codebuff_tokens or (None,)
         self._accounts: list[CodebuffAccount] = []
         for index, token in enumerate(tokens, start=1):
@@ -744,7 +778,7 @@ class CodebuffAccountPool:
                 codebuff_token=token,
                 token_index=index,
             )
-            client = CodebuffClient(account_settings)
+            client = CodebuffClient(account_settings, quota_store=self._quota)
             self._accounts.append(
                 CodebuffAccount(
                     client=client,
@@ -759,6 +793,10 @@ class CodebuffAccountPool:
     @property
     def account_count(self) -> int:
         return len(self._accounts)
+
+    @property
+    def quota(self) -> QuotaStore:
+        return self._quota
 
     @property
     def default_client(self) -> CodebuffClient:

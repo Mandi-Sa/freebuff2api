@@ -262,6 +262,12 @@ async def healthz(request: Request) -> dict[str, Any]:
     return {"status": "ok"}
 
 
+@app.get("/admin/quota")
+async def admin_quota(request: Request) -> dict[str, Any]:
+    _check_local_auth(request)
+    return {"tokens": _accounts(request).quota.snapshot()}
+
+
 @app.get("/v1/models")
 async def list_models(request: Request) -> dict[str, Any]:
     _check_local_auth(request)

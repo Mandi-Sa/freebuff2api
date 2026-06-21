@@ -11,3 +11,4 @@ wheels/
 
 # Local configuration
 .env
+data/

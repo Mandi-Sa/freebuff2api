@@ -111,8 +111,9 @@ class LeaseSwitchModelClient:
 
 
 class PoolClient:
-    def __init__(self, settings) -> None:
+    def __init__(self, settings, quota_store=None) -> None:
         self.settings = settings
+        self.quota_store = quota_store
         self.closed = False
 
     async def aclose(self) -> None:
