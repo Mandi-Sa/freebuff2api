@@ -975,7 +975,13 @@ class CodebuffAccountPool:
             account_index = (start + offset) % account_count
             if account_index in exclude_account_indices:
                 continue
-            if not self._accounts[account_index].busy:
+            account = self._accounts[account_index]
+            # don't let an unlimited request switch a token that is mid premium
+            # block to another model (it would waste paid premium time); premium
+            # itself (allow_switch=False) still targets the active token.
+            if allow_switch and account.holds_premium:
+                continue
+            if not account.busy:
                 return account_index
         return None
 

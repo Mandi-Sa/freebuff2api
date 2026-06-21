@@ -462,6 +462,18 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     await first.aclose()
                     await pool.aclose()
 
+    def test_unlimited_skips_premium_holding_token(self):
+        with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
+            pool = CodebuffAccountPool(
+                Settings(codebuff_token="token-a,token-b", local_api_key=None)
+            )
+        pool._active_index = 0
+        pool._accounts[0].premium_started = 1.0  # token-a is mid premium block
+        # unlimited must skip the premium-holding active token
+        self.assertEqual(pool._next_available_index(set(), allow_switch=True), 1)
+        # premium still targets the active token
+        self.assertEqual(pool._next_available_index(set(), allow_switch=False), 0)
+
     def test_seconds_until_next_window_counts_down_to_boundary(self):
         with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
             pool = CodebuffAccountPool(
