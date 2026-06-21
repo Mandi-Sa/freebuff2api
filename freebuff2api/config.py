@@ -41,7 +41,7 @@ class Settings:
     locale: str = "zh-CN"
     os_name: str = "windows"
     unlimited_model: str = "deepseek/deepseek-v4-flash"
-    schedule_utc_offset: float = -4.0
+    schedule_utc_offset: float = -7.0
 
     @property
     def codebuff_api_url(self) -> str:
@@ -142,5 +142,5 @@ def load_settings() -> Settings:
         unlimited_model=os.getenv(
             "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
         ),
-        schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-4")),
+        schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
     )
