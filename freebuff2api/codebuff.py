@@ -1044,7 +1044,11 @@ class CodebuffAccountPool:
             self._accounts[new_index].client.settings.token_index,
             account_count,
         )
-        self._schedule_session_delete(previous_index, "rotate")
+        # only the outgoing token's premium session is worth deleting (to stop
+        # billing sooner than its block watcher would); unlimited sessions are
+        # free and reusable, so leave them in place.
+        if self._accounts[previous_index].holds_premium:
+            self._schedule_session_delete(previous_index, "rotate")
 
     def _schedule_session_delete(self, account_index: int, reason: str) -> None:
         account = self._accounts[account_index]
