@@ -774,9 +774,12 @@ class CodebuffAccountPool:
             return_exceptions=True,
         )
 
+    def _now(self) -> datetime:
+        return datetime.now(self._settings.schedule_timezone)
+
     async def _run_scheduler(self) -> None:
         while True:
-            await asyncio.sleep(self._seconds_until_next_window(datetime.now()))
+            await asyncio.sleep(self._seconds_until_next_window(self._now()))
             try:
                 async with self._condition:
                     self._refresh_active_window()
@@ -941,7 +944,7 @@ class CodebuffAccountPool:
 
     def _refresh_active_window(self) -> None:
         account_count = len(self._accounts)
-        new_index = _token_window_index(datetime.now(), account_count)
+        new_index = _token_window_index(self._now(), account_count)
         if self._active_index is None:
             self._active_index = new_index
             return

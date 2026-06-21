@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -40,6 +41,7 @@ class Settings:
     locale: str = "zh-CN"
     os_name: str = "windows"
     unlimited_model: str = "deepseek/deepseek-v4-flash"
+    schedule_utc_offset: float = -4.0
 
     @property
     def codebuff_api_url(self) -> str:
@@ -73,6 +75,10 @@ class Settings:
     def park_model(self) -> str | None:
         models = self.unlimited_models
         return models[0] if models else None
+
+    @property
+    def schedule_timezone(self) -> timezone:
+        return timezone(timedelta(hours=self.schedule_utc_offset))
 
     @property
     def token_hint(self) -> str:
@@ -136,4 +142,5 @@ def load_settings() -> Settings:
         unlimited_model=os.getenv(
             "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
         ),
+        schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-4")),
     )

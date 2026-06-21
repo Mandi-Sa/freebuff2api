@@ -73,6 +73,20 @@ class ConfigTests(unittest.TestCase):
             ("token-a", "token-b", "token-c"),
         )
 
+    def test_schedule_timezone_defaults_to_utc_minus_4(self) -> None:
+        settings = Settings(codebuff_token="token", local_api_key=None)
+        offset = settings.schedule_timezone.utcoffset(None)
+        self.assertEqual(offset.total_seconds(), -4 * 3600)
+
+    def test_load_settings_reads_schedule_utc_offset(self) -> None:
+        with patch.dict("os.environ", {"FREEBUFF_SCHEDULE_UTC_OFFSET": "-3"}):
+            settings = load_settings()
+
+        self.assertEqual(settings.schedule_utc_offset, -3.0)
+        self.assertEqual(
+            settings.schedule_timezone.utcoffset(None).total_seconds(), -3 * 3600
+        )
+
     def test_load_settings_does_not_expose_custom_browser_user_agent(self) -> None:
         with patch.dict(
             "os.environ",
