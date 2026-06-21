@@ -324,7 +324,11 @@ async def chat_completions(request: Request) -> Any:
         )
 
     messages = normalize_chat_messages(body.get("messages"))
-    max_attempts = _max_account_attempts(request)
+    # premium is locked to the current-window token, so cross-token retry is
+    # futile and would mask the real reason (e.g. quota exhausted).
+    max_attempts = (
+        1 if settings.is_premium(session_model) else _max_account_attempts(request)
+    )
     excluded_accounts: set[int] = set()
 
     for attempt in range(1, max_attempts + 1):

@@ -249,12 +249,32 @@ class CodebuffClient:
         self._record_quota(data)
         return data
 
-    async def create_session(self, model: str) -> FreebuffSession:
-        data = await self._json(
-            "POST",
-            "/api/v1/freebuff/session",
-            headers=self._headers(extra={"x-freebuff-model": model}),
+    def _premium_quota_error(self, cause: CodebuffError) -> CodebuffError:
+        reset_at = None
+        if self.quota_store is not None:
+            tracked = self.quota_store.get(self.settings.token_index)
+            if tracked is not None:
+                reset_at = tracked.reset_at
+        suffix = f"; resets at {reset_at}" if reset_at else ""
+        return CodebuffError(
+            f"premium quota exhausted for token {self.settings.token_hint} "
+            f"(premium model {self.settings.premium_model}){suffix}",
+            429,
+            token_index=self.settings.token_index,
+            token_hint=self.settings.token_hint,
         )
+
+    async def create_session(self, model: str) -> FreebuffSession:
+        try:
+            data = await self._json(
+                "POST",
+                "/api/v1/freebuff/session",
+                headers=self._headers(extra={"x-freebuff-model": model}),
+            )
+        except CodebuffError as error:
+            if error.status_code == 429 and model == self.settings.premium_model:
+                raise self._premium_quota_error(error) from error
+            raise
         self._record_quota(data)
         if data.get("status") == "queued":
             return await self._wait_for_active_session(data, model)

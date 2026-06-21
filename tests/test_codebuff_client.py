@@ -270,6 +270,34 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("当前 IP/区域", str(ctx.exception))
         self.assertIn("US", str(ctx.exception))
 
+    async def test_create_session_premium_quota_exhausted_message(self) -> None:
+        def rate_limited(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                429, json={"status": "rate_limited", "retryAfterMs": 50_000_000}
+            )
+
+        client = CodebuffClient(
+            Settings(
+                codebuff_token="token",
+                local_api_key=None,
+                premium_model="moonshotai/kimi-k2.6",
+                request_timeout=1,
+            )
+        )
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(rate_limited), timeout=1
+        )
+
+        try:
+            with self.assertRaises(CodebuffError) as ctx:
+                await client.create_session("moonshotai/kimi-k2.6")
+        finally:
+            await client.aclose()
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertIn("premium quota exhausted", str(ctx.exception))
+
     async def test_chat_stream_preserves_upstream_unavailable_status(self) -> None:
         def unavailable(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, text="service unavailable")

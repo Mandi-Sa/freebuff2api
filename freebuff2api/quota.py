@@ -119,6 +119,10 @@ class QuotaStore:
         except OSError:
             logger.warning("failed to persist quota file=%s", self._path)
 
+    def get(self, token_index: int) -> TokenQuota | None:
+        with self._lock:
+            return self._quotas.get(token_index)
+
     def snapshot(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         with self._lock:
