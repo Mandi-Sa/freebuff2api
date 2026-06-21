@@ -40,20 +40,41 @@ FREEBUFF_TOKEN=token-a,token-b,token-c
 ```
 
 多账号还会按一天 24 小时平均分时使用：N 个 token 时，每个 token 使用
-`24 / N` 小时后切换到下一个；即使没有请求，后台也会在窗口边界按点切换，并删除上一个
-token 的上游会话。
+`24 / N` 小时后切换到下一个；即使没有请求，后台也会在窗口边界（时区由
+`FREEBUFF_SCHEDULE_UTC_OFFSET` 决定）按点切换，并删除上一个 token 的上游会话。
 
-token 选择规则：
+### 模型准入
 
-- 请求命中 `FREEBUFF_UNLIMITED_MODEL` 白名单（逗号分隔，可多个）的模型时，当前时段
-  token 繁忙可回退到其他空闲 token（日志 `using fallback freebuff token_index=...`）。
-- 请求其他模型（含各 PRO 模型）时，只允许使用当前时段的 token，繁忙也不切换、只排队
-  等待（日志 `current window token ... reached concurrency limit ... waiting`）。
-- premium（非白名单）请求结束后空闲超过 `FREEBUFF_SESSION_IDLE_TIMEOUT` 秒，会删除其
-  上游会话以停止按会话时间计费；分时切换 token 时也会删除上一个 token 的会话。
+按**底层会话模型**判定，只允许两类，其余一律拒绝（400）：
 
-日志会打印当前正在使用第几个 token（`using freebuff token_index=2/3 ...`）以及窗口切换
-（`freebuff token window switch ...`）。
+- **唯一 premium 模型** `FREEBUFF_PREMIUM_MODEL`（默认 `moonshotai/kimi-k2.6`）；
+- **unlimited 白名单** `FREEBUFF_UNLIMITED_MODEL`（逗号分隔，可多个）。
+
+判定看的是模型实际使用的会话模型（`session_id`），因此借壳的 gemini 也会放行：
+`gemini-3.1-pro` 借 kimi → 当 premium；两个 `gemini-*-flash-lite` 借 deepseek-flash →
+当 unlimited。`/v1/models` 也只列出允许的模型。
+
+### 调度规则
+
+- **premium 请求**：锁定当前时段 token，繁忙只排队、不跨 token，也不跨模型；额度耗尽
+  时直接返回 `premium quota exhausted ... resets at ...`。
+- **unlimited 请求**：当前时段 token 繁忙或正持有 premium 会话时，回退到其他空闲 token；
+  空闲超过 `FREEBUFF_SESSION_IDLE_TIMEOUT` 秒后删除其会话。
+
+### premium 计费块复用
+
+premium 上游按 6 分钟一块阶梯计费（每块约 0.1，5/天）。同一 token 的 premium 会话在
+一个计费块内**复用**（多次请求只算一块），后台看守在每个块边界前
+`FREEBUFF_DESTROY_LEAD_SECONDS` 秒、token 空闲时销毁会话；销毁时正忙则顺延到下一块。
+
+### 额度统计
+
+每次会话响应里的 premium 用量（`used/limit/resetAt`）会被解析、落盘到
+`FREEBUFF_QUOTA_FILE`，并在变化时打印日志。`GET /admin/quota` 返回各 token 的额度快照
+（reset 后 `effective_used` 归零）。
+
+日志统一带 `[请求id t序号/总数 模式]` 前缀（模式 `U`=unlimited 绿、`P`=premium 黄），
+便于并发归组。
 
 复制 `.env.example` 为 `.env`，然后填写上游 token：
 
