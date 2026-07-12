@@ -25,7 +25,7 @@ class QueuedSessionClient(CodebuffClient):
             {
                 "status": "queued",
                 "instanceId": "queued-instance",
-                "model": "moonshotai/kimi-k2.6",
+                "model": "moonshotai/kimi-k2.7-code",
                 "position": 0,
                 "queueDepth": 0,
                 "estimatedWaitMs": 0,
@@ -33,7 +33,7 @@ class QueuedSessionClient(CodebuffClient):
             {
                 "status": "active",
                 "instanceId": "queued-instance",
-                "model": "moonshotai/kimi-k2.6",
+                "model": "moonshotai/kimi-k2.7-code",
                 "expiresAt": "2026-05-23T16:04:31.177Z",
                 "remainingMs": 3_000_000,
             },
@@ -101,12 +101,12 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_session_polls_queued_session_until_active(self) -> None:
         client = QueuedSessionClient()
         try:
-            session = await client.create_session("moonshotai/kimi-k2.6")
+            session = await client.create_session("moonshotai/kimi-k2.7-code")
         finally:
             await client.aclose()
 
         self.assertEqual(session.instance_id, "queued-instance")
-        self.assertEqual(session.model, "moonshotai/kimi-k2.6")
+        self.assertEqual(session.model, "moonshotai/kimi-k2.7-code")
         self.assertEqual(
             client.calls,
             [
@@ -280,7 +280,7 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
             Settings(
                 codebuff_token="token",
                 local_api_key=None,
-                premium_model="moonshotai/kimi-k2.6",
+                premium_model="moonshotai/kimi-k2.7-code",
                 request_timeout=1,
             )
         )
@@ -291,7 +291,7 @@ class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
 
         try:
             with self.assertRaises(CodebuffError) as ctx:
-                await client.create_session("moonshotai/kimi-k2.6")
+                await client.create_session("moonshotai/kimi-k2.7-code")
         finally:
             await client.aclose()
 

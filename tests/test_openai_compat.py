@@ -26,7 +26,7 @@ class OpenAICompatTests(unittest.TestCase):
         )
 
     def test_resolve_model_maps_agent_id(self) -> None:
-        model = resolve_model("moonshotai/kimi-k2.6")
+        model = resolve_model("moonshotai/kimi-k2.7-code")
 
         self.assertEqual(model.agent_id, "base2-free-kimi")
 
@@ -40,7 +40,7 @@ class OpenAICompatTests(unittest.TestCase):
 
         self.assertEqual(model.agent_id, GEMINI_THINKER_AGENT_ID)
         self.assertEqual(model.parent_agent_id, "base2-free-kimi")
-        self.assertEqual(model.session_id, "moonshotai/kimi-k2.6")
+        self.assertEqual(model.session_id, "moonshotai/kimi-k2.7-code")
         self.assertEqual(model.upstream_id, "google/gemini-3.1-pro-preview")
 
     def test_resolve_gemini_flash_lite_runs_under_session_root(self) -> None:

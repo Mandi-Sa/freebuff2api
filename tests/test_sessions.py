@@ -185,10 +185,10 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             Settings(codebuff_token="token", local_api_key=None),
         )
 
-        session = await manager.ensure_session("moonshotai/kimi-k2.6")
+        session = await manager.ensure_session("moonshotai/kimi-k2.7-code")
 
         self.assertEqual(session.instance_id, "kimi-instance")
-        self.assertEqual(session.model, "moonshotai/kimi-k2.6")
+        self.assertEqual(session.model, "moonshotai/kimi-k2.7-code")
         self.assertEqual(
             client.calls,
             [
@@ -196,7 +196,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 ("delete_session",),
                 ("request_ads", "gravity", [], "waiting_room"),
                 ("request_ads", "zeroclick", [], "waiting_room"),
-                ("create_session", "moonshotai/kimi-k2.6"),
+                ("create_session", "moonshotai/kimi-k2.7-code"),
             ],
         )
 
@@ -212,7 +212,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
         async def acquire_second():
             started.set()
-            return await manager.acquire_session("moonshotai/kimi-k2.6")
+            return await manager.acquire_session("moonshotai/kimi-k2.7-code")
 
         task = asyncio.create_task(acquire_second())
         await started.wait()
@@ -227,7 +227,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         await first.aclose()
         second = await asyncio.wait_for(task, timeout=1)
         try:
-            self.assertEqual(second.session.model, "moonshotai/kimi-k2.6")
+            self.assertEqual(second.session.model, "moonshotai/kimi-k2.7-code")
             self.assertIn(
                 ("delete_session", "deepseek/deepseek-v4-flash"),
                 client.calls,
@@ -292,7 +292,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="moonshotai/kimi-k2.7-code",
             premium_model="deepseek/deepseek-v4-pro",
             session_block_seconds=999,
             destroy_lead_seconds=0,
@@ -322,7 +322,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="deepseek/deepseek-v4-pro",
-            premium_model="moonshotai/kimi-k2.6",
+            premium_model="moonshotai/kimi-k2.7-code",
         )
         windows = iter([0, 1])
 
@@ -350,7 +350,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             codebuff_token="token-a,token-b",
             local_api_key=None,
             unlimited_model="deepseek/deepseek-v4-pro",
-            premium_model="moonshotai/kimi-k2.6",
+            premium_model="moonshotai/kimi-k2.7-code",
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", IdlePoolClient):
@@ -372,7 +372,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="moonshotai/kimi-k2.7-code",
             premium_model="deepseek/deepseek-v4-pro",
             session_block_seconds=999,
             destroy_lead_seconds=0,
@@ -397,7 +397,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="moonshotai/kimi-k2.7-code",
             premium_model="deepseek/deepseek-v4-pro",
             session_block_seconds=0.2,
             destroy_lead_seconds=0.05,
@@ -421,7 +421,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="moonshotai/kimi-k2.7-code",
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", PoolClient):
@@ -456,7 +456,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6",
+            unlimited_model="moonshotai/kimi-k2.7-code",
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):
@@ -464,8 +464,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 "freebuff2api.codebuff._token_window_index", lambda now, count: 0
             ):
                 pool = CodebuffAccountPool(settings)
-                first = await pool.acquire_session("moonshotai/kimi-k2.6")
-                second = await pool.acquire_session("moonshotai/kimi-k2.6")
+                first = await pool.acquire_session("moonshotai/kimi-k2.7-code")
+                second = await pool.acquire_session("moonshotai/kimi-k2.7-code")
                 try:
                     self.assertEqual(first.client.settings.codebuff_token, "token-a")
                     self.assertEqual(second.client.settings.codebuff_token, "token-b")
@@ -478,7 +478,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             codebuff_token="token-a,token-b",
             local_api_key=None,
-            unlimited_model="moonshotai/kimi-k2.6, minimax/minimax-m3",
+            unlimited_model="moonshotai/kimi-k2.7-code, minimax/minimax-m3",
         )
 
         with patch("freebuff2api.codebuff.CodebuffClient", ParkingPoolClient):

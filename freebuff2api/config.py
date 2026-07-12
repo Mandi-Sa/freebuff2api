@@ -41,7 +41,7 @@ class Settings:
     locale: str = "zh-CN"
     os_name: str = "windows"
     unlimited_model: str = "deepseek/deepseek-v4-flash"
-    premium_model: str = "moonshotai/kimi-k2.6"
+    premium_model: str = "moonshotai/kimi-k2.7-code"
     schedule_utc_offset: float = -7.0
     session_block_seconds: float = 360.0
     destroy_lead_seconds: float = 45.0
@@ -150,7 +150,7 @@ def load_settings() -> Settings:
         unlimited_model=os.getenv(
             "FREEBUFF_UNLIMITED_MODEL", "deepseek/deepseek-v4-flash"
         ),
-        premium_model=os.getenv("FREEBUFF_PREMIUM_MODEL", "moonshotai/kimi-k2.6"),
+        premium_model=os.getenv("FREEBUFF_PREMIUM_MODEL", "moonshotai/kimi-k2.7-code"),
         schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
         session_block_seconds=float(os.getenv("FREEBUFF_SESSION_BLOCK_SECONDS", "360")),
         destroy_lead_seconds=float(os.getenv("FREEBUFF_DESTROY_LEAD_SECONDS", "45")),

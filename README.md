@@ -47,7 +47,7 @@ FREEBUFF_TOKEN=token-a,token-b,token-c
 
 按**底层会话模型**判定，只允许两类，其余一律拒绝（400）：
 
-- **唯一 premium 模型** `FREEBUFF_PREMIUM_MODEL`（默认 `moonshotai/kimi-k2.6`）；
+- **唯一 premium 模型** `FREEBUFF_PREMIUM_MODEL`（默认 `moonshotai/kimi-k2.7-code`）；
 - **unlimited 白名单** `FREEBUFF_UNLIMITED_MODEL`（逗号分隔，可多个）。
 
 判定看的是模型实际使用的会话模型（`session_id`），因此借壳的 gemini 也会放行：
@@ -119,7 +119,7 @@ FREEBUFF_PROXY_URL=socks5h://127.0.0.1:1080
 
 - `deepseek/deepseek-v4-flash`
 - `deepseek/deepseek-v4-pro`
-- `moonshotai/kimi-k2.6`
+- `moonshotai/kimi-k2.7-code`
 - `minimax/minimax-m2.7`
 - `minimax/minimax-m3`
 - `google/gemini-2.5-flash-lite`

@@ -106,7 +106,7 @@ class AppErrorTests(unittest.TestCase):
             codebuff_token="t1",
             local_api_key=None,
             unlimited_model="deepseek/deepseek-v4-flash",
-            premium_model="moonshotai/kimi-k2.6",
+            premium_model="moonshotai/kimi-k2.7-code",
         )
         response = TestClient(app).post(
             "/v1/chat/completions",
@@ -123,14 +123,14 @@ class AppErrorTests(unittest.TestCase):
             codebuff_token="t1",
             local_api_key=None,
             unlimited_model="deepseek/deepseek-v4-flash,minimax/minimax-m3",
-            premium_model="moonshotai/kimi-k2.6",
+            premium_model="moonshotai/kimi-k2.7-code",
         )
         response = TestClient(app).get("/v1/models")
         ids = {m["id"] for m in response.json()["data"]}
         self.assertEqual(
             ids,
             {
-                "moonshotai/kimi-k2.6",
+                "moonshotai/kimi-k2.7-code",
                 "deepseek/deepseek-v4-flash",
                 "minimax/minimax-m3",
                 # gemini variants ride allowed hosts (kimi / deepseek-flash)
