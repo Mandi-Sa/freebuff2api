@@ -51,11 +51,11 @@ class OpenAICompatTests(unittest.TestCase):
         self.assertEqual(model.session_id, "deepseek/deepseek-v4-flash")
 
     def test_resolve_gemini_flash_preview_uses_program_default_agent(self) -> None:
-        model = resolve_model("google/gemini-3.1-flash-lite-preview")
+        model = resolve_model("google/gemini-3.1-flash-lite")
 
         self.assertEqual(model.agent_id, "file-picker-max")
         self.assertEqual(model.parent_agent_id, "base2-free-deepseek-flash")
-        self.assertEqual(model.upstream_id, "google/gemini-3.1-flash-lite-preview")
+        self.assertEqual(model.upstream_id, "google/gemini-3.1-flash-lite")
 
     def test_agent_validation_payload_defines_spawnable_agents(self) -> None:
         payload = agent_validation_payload()
@@ -106,7 +106,7 @@ class OpenAICompatTests(unittest.TestCase):
     def test_build_upstream_payload_can_override_upstream_model(self) -> None:
         payload = build_upstream_payload(
             {
-                "model": "google/gemini-3.1-flash-lite-preview",
+                "model": "google/gemini-3.1-flash-lite",
                 "messages": [],
             },
             session=FreebuffSession(
@@ -116,10 +116,10 @@ class OpenAICompatTests(unittest.TestCase):
             run_id="run-1",
             client_id="client-1",
             trace_session_id="trace-1",
-            upstream_model_id="google/gemini-3.1-flash-lite-preview",
+            upstream_model_id="google/gemini-3.1-flash-lite",
         )
 
-        self.assertEqual(payload["model"], "google/gemini-3.1-flash-lite-preview")
+        self.assertEqual(payload["model"], "google/gemini-3.1-flash-lite")
 
     def test_build_upstream_payload_maps_developer_role_to_system(self) -> None:
         body = {

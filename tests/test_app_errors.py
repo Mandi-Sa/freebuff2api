@@ -135,7 +135,7 @@ class AppErrorTests(unittest.TestCase):
                 "minimax/minimax-m3",
                 # gemini variants ride allowed hosts (kimi / deepseek-flash)
                 "google/gemini-2.5-flash-lite",
-                "google/gemini-3.1-flash-lite-preview",
+                "google/gemini-3.1-flash-lite",
                 "google/gemini-3.1-pro-preview",
             },
         )

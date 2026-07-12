@@ -25,7 +25,6 @@ FREEBUFF_MODELS: tuple[FreebuffModel, ...] = (
     FreebuffModel("deepseek/deepseek-v4-flash", "base2-free-deepseek-flash"),
     FreebuffModel("deepseek/deepseek-v4-pro", "base2-free-deepseek"),
     FreebuffModel("moonshotai/kimi-k2.7-code", "base2-free-kimi"),
-    FreebuffModel("minimax/minimax-m2.7", "base2-free"),
     FreebuffModel("minimax/minimax-m3", "base2-free-minimax-m3"),
     FreebuffModel("mimo/mimo-v2.5", "base2-free-mimo"),
     FreebuffModel("mimo/mimo-v2.5-pro", "base2-free-mimo-pro"),
@@ -33,6 +32,7 @@ FREEBUFF_MODELS: tuple[FreebuffModel, ...] = (
 
 DEFAULT_MODEL = FREEBUFF_MODELS[0]
 CONTEXT_PRUNER_AGENT_ID = "context-pruner"
+CONTEXT_PRUNER_MODEL_ID = "anthropic/claude-sonnet-4.6"
 GEMINI_THINKER_AGENT_ID = "thinker-with-files-gemini"
 GEMINI_THINKER_PARENT_AGENT_ID = "base2-free-kimi"
 GEMINI_THINKER_PARENT_MODEL_ID = "moonshotai/kimi-k2.7-code"
@@ -47,7 +47,7 @@ GEMINI_FREE_MODELS: tuple[FreebuffModel, ...] = (
         parent_agent_id=DEFAULT_MODEL.agent_id,
     ),
     FreebuffModel(
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite",
         "file-picker-max",
         owned_by="google",
         session_model_id=GEMINI_FLASH_LITE_SESSION_MODEL_ID,
@@ -110,7 +110,7 @@ def agent_validation_payload() -> dict[str, object]:
     definitions.append(
         _agent_definition(
             agent_id=CONTEXT_PRUNER_AGENT_ID,
-            model_id=DEFAULT_MODEL.id,
+            model_id=CONTEXT_PRUNER_MODEL_ID,
             display_name="Context Pruner",
             spawnable_agents=[],
         )
