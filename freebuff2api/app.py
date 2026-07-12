@@ -553,11 +553,14 @@ async def _collect_completion(
             message_id = data.get("id") or message_id
             accumulator.add(data)
         response = accumulator.final_response()
+        message = response["choices"][0]["message"]
         logger.info(
-            "chat completion response run_id=%s message_id=%s content_chars=%s finish_reason=%s",
+            "chat completion response run_id=%s message_id=%s "
+            "content_chars=%s reasoning_chars=%s finish_reason=%s",
             run.run_id,
             message_id,
-            len(response["choices"][0]["message"].get("content") or ""),
+            len(message.get("content") or ""),
+            len(message.get("reasoning_content") or ""),
             response["choices"][0].get("finish_reason"),
         )
         if _settings(request).debug:
