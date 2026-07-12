@@ -195,7 +195,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 ("get_session", None),
                 ("delete_session",),
                 ("request_ads", "gravity", [], "waiting_room"),
-                ("request_ads", "zeroclick", [], "waiting_room"),
+                ("request_ads", "carbon", [], "waiting_room"),
                 ("create_session", "moonshotai/kimi-k2.7-code"),
             ],
         )

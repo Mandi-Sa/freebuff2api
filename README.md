@@ -87,7 +87,7 @@ Copy-Item .env.example .env
 ```dotenv
 FREEBUFF_TOKEN=你的 Freebuff Bearer token
 FREEBUFF_API_KEY=本地 OpenAI API key，可留空
-FREEBUFF_AD_PROVIDERS=gravity,zeroclick
+FREEBUFF_AD_PROVIDERS=gravity,carbon
 FREEBUFF_PROXY_ENABLED=false
 FREEBUFF_PROXY_URL=
 FREEBUFF_DEBUG=false
