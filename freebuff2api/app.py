@@ -585,6 +585,12 @@ async def _start_freebuff_run_chain(
     agent_id = model.agent_id
     started_at = utc_now_iso()
     run_id = await client.start_run(agent_id)
+    # The context-pruner prunes the context before the model generates, so its
+    # sub-run completes before the chat -- mirroring the SDK, where a
+    # pre-generation subagent is awaited before the parent streams. The parent
+    # run's own steps + finish are recorded after the stream (see finalize),
+    # matching the SDK's addAgentStep/finishAgentRun ordering and keeping them
+    # off the first-token path.
     child_started_at = utc_now_iso()
     child_run_id = await client.start_run(
         CONTEXT_PRUNER_AGENT_ID,
@@ -598,13 +604,6 @@ async def _start_freebuff_run_chain(
         start_time=child_started_at,
     )
     await client.finish_run(child_run_id, total_steps=2)
-    await client.record_run_step(
-        run_id,
-        step_number=1,
-        child_run_ids=[child_run_id],
-        message_id=None,
-        start_time=started_at,
-    )
     return FreebuffRun(
         run_id=run_id,
         agent_id=agent_id,
@@ -696,6 +695,16 @@ async def _finalize_run_with_client(
             logger.debug("finalize parent/child run done run_id=%s", run.run_id)
             return
 
+        # Parent steps are recorded after the stream (the SDK records
+        # addAgentStep after each generation); step1 references the
+        # context-pruner sub-run started before the chat.
+        await client.record_run_step(
+            run.run_id,
+            step_number=1,
+            child_run_ids=[run.child_run_id] if run.child_run_id else [],
+            message_id=None,
+            start_time=run.started_at,
+        )
         await client.record_run_step(
             run.run_id,
             step_number=2,

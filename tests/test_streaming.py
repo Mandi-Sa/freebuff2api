@@ -3,7 +3,12 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from freebuff2api.app import PreparedChatAttempt, _start_freebuff_run_chain, _stream_openai_chunks
+from freebuff2api.app import (
+    PreparedChatAttempt,
+    _finalize_run_with_client,
+    _start_freebuff_run_chain,
+    _stream_openai_chunks,
+)
 from freebuff2api.codebuff import CodebuffError, FreebuffRun
 from freebuff2api.config import Settings
 from freebuff2api.models import resolve_model
@@ -179,11 +184,14 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.recorded)
         self.assertTrue(client.finished)
 
-    async def test_run_chain_matches_freebuff_parent_child_shape(self) -> None:
+    async def test_run_chain_records_pruner_before_chat(self) -> None:
         client = FakeClient()
 
         run = await _start_freebuff_run_chain(client, "base2-free-kimi")
 
+        # closest to the SDK: the pre-generation context-pruner sub-run is
+        # fully recorded before the chat; the parent run's own steps are
+        # deferred to finalize (SDK records addAgentStep after the stream).
         self.assertEqual(run.run_id, "run-1")
         self.assertEqual(run.child_run_id, "run-2")
         self.assertEqual(client.calls[0], ("start", "base2-free-kimi", [], "run-1"))
@@ -195,8 +203,17 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[2][1], ("run-2",))
         self.assertEqual(client.calls[2][2]["step_number"], 1)
         self.assertEqual(client.calls[2][2]["child_run_ids"], [])
-        self.assertEqual(client.calls[2][2]["message_id"], None)
         self.assertEqual(client.calls[3], ("finish", ("run-2",), {"total_steps": 2}))
+        # no parent step recorded yet -- those land after the stream
+        self.assertEqual(len(client.calls), 4)
+
+    async def test_finalize_records_parent_steps_after_stream(self) -> None:
+        client = FakeClient()
+
+        run = await _start_freebuff_run_chain(client, "base2-free-kimi")
+        await _finalize_run_with_client(client, run, "msg-1")
+
+        # parent step1 references the pruner child; step2 carries the message id
         self.assertEqual(
             client.calls[4],
             (
@@ -210,6 +227,20 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
         )
+        self.assertEqual(
+            client.calls[5],
+            (
+                "step",
+                ("run-1",),
+                {
+                    "step_number": 2,
+                    "child_run_ids": [],
+                    "message_id": "msg-1",
+                    "start_time": run.started_at,
+                },
+            ),
+        )
+        self.assertEqual(client.calls[6], ("finish", ("run-1",), {"total_steps": 3}))
 
     async def test_gemini_thinker_run_chain_uses_child_as_payload_run(self) -> None:
         client = FakeClient()
