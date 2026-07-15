@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from freebuff2api.codebuff import (
@@ -175,6 +175,99 @@ class IdlePoolClient(PoolClient):
 
     async def delete_session(self) -> None:
         IdlePoolClient.deleted.append(self.settings.codebuff_token)
+
+
+class ReuseFastPathClient:
+    """Records every upstream call so tests can assert the confirm GET is skipped."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    async def get_session(self, instance_id=None):
+        self.calls.append(("get_session", instance_id))
+        return {
+            "status": "active",
+            "instanceId": instance_id,
+            "model": "deepseek/deepseek-v4-flash",
+            "remainingMs": 3_600_000,
+        }
+
+    async def delete_session(self) -> None:
+        self.calls.append(("delete_session",))
+
+    async def request_ads(self, provider, messages=None, *, surface=None) -> dict:
+        self.calls.append(("request_ads", provider))
+        return {"ads": []}
+
+    async def get_streak(self) -> dict:
+        self.calls.append(("get_streak",))
+        return {"streak": 0}
+
+    async def create_session(self, model):
+        self.calls.append(("create_session", model))
+        return FreebuffSession(instance_id="new", model=model, remaining_ms=3_600_000)
+
+
+def _iso_in(**delta) -> str:
+    return (
+        (datetime.now(timezone.utc) + timedelta(**delta))
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+class ReuseFastPathTests(unittest.IsolatedAsyncioTestCase):
+    MODEL = "deepseek/deepseek-v4-flash"
+
+    def _seed(self, manager, expires_at) -> None:
+        manager._sessions[self.MODEL] = FreebuffSession(
+            instance_id="live",
+            model=self.MODEL,
+            expires_at=expires_at,
+            remaining_ms=3_600_000,
+        )
+
+    async def test_reuse_skips_confirm_when_expiry_far(self):
+        client = ReuseFastPathClient()
+        manager = SessionManager(
+            client, Settings(codebuff_token="t", local_api_key=None)
+        )
+        self._seed(manager, _iso_in(hours=1))
+
+        session = await manager.ensure_session(self.MODEL)
+
+        self.assertEqual(session.instance_id, "live")
+        # far-future expiry -> reuse with zero upstream round-trips
+        self.assertEqual(client.calls, [])
+
+    async def test_reuse_confirms_when_expiry_near(self):
+        client = ReuseFastPathClient()
+        manager = SessionManager(
+            client, Settings(codebuff_token="t", local_api_key=None)
+        )
+        self._seed(manager, _iso_in(seconds=60))  # inside the 300s margin
+
+        session = await manager.ensure_session(self.MODEL)
+
+        self.assertEqual(session.instance_id, "live")
+        self.assertEqual(client.calls, [("get_session", "live")])
+
+    async def test_margin_zero_always_confirms(self):
+        client = ReuseFastPathClient()
+        manager = SessionManager(
+            client,
+            Settings(
+                codebuff_token="t",
+                local_api_key=None,
+                session_reuse_confirm_margin=0,
+            ),
+        )
+        self._seed(manager, _iso_in(hours=1))
+
+        await manager.ensure_session(self.MODEL)
+
+        # margin 0 disables the fast path -> always confirm upstream
+        self.assertEqual(client.calls, [("get_session", "live")])
 
 
 class SessionManagerTests(unittest.IsolatedAsyncioTestCase):

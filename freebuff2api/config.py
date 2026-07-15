@@ -45,6 +45,7 @@ class Settings:
     schedule_utc_offset: float = -7.0
     session_block_seconds: float = 360.0
     destroy_lead_seconds: float = 45.0
+    session_reuse_confirm_margin: float = 300.0
     quota_file: str = "data/quota.json"
 
     @property
@@ -154,5 +155,8 @@ def load_settings() -> Settings:
         schedule_utc_offset=float(os.getenv("FREEBUFF_SCHEDULE_UTC_OFFSET", "-7")),
         session_block_seconds=float(os.getenv("FREEBUFF_SESSION_BLOCK_SECONDS", "360")),
         destroy_lead_seconds=float(os.getenv("FREEBUFF_DESTROY_LEAD_SECONDS", "45")),
+        session_reuse_confirm_margin=float(
+            os.getenv("FREEBUFF_SESSION_REUSE_CONFIRM_MARGIN", "300")
+        ),
         quota_file=os.getenv("FREEBUFF_QUOTA_FILE", "data/quota.json"),
     )

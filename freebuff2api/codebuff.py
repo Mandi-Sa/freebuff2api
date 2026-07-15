@@ -604,6 +604,23 @@ class SessionManager:
             await self.client.delete_session()
             return True
 
+    def _reuse_without_confirm(self, session: FreebuffSession) -> bool:
+        """True if a cached session is provably alive without an upstream check.
+
+        Free sessions carry a fixed ~1h expiry (``expiresAt`` from admission);
+        the official CLI never re-checks the session on the send path. When the
+        cached expiry is comfortably in the future we skip the ~2s
+        ``get_session`` confirm and reuse straight away. If the session was
+        killed early upstream the chat fails and the normal retry rebuilds, so
+        this only trades a rare extra retry for a saved round-trip on the hot
+        path. Margin <= 0 disables the fast path (always confirm).
+        """
+        margin = self.settings.session_reuse_confirm_margin
+        if margin <= 0:
+            return False
+        remaining = _session_remaining_seconds(session)
+        return remaining is not None and remaining > margin
+
     async def _ensure_session_locked(
         self,
         model: str,
@@ -611,6 +628,13 @@ class SessionManager:
     ) -> FreebuffSession:
         cached = self._sessions.get(model)
         if cached and cached.is_fresh:
+            if self._reuse_without_confirm(cached):
+                logger.debug(
+                    "reuse freebuff session (skip confirm) model=%s instance_id=%s",
+                    model,
+                    cached.instance_id,
+                )
+                return cached
             try:
                 data = await self.client.get_session(cached.instance_id)
                 if data.get("status") == "active" and data.get("model") in {
@@ -1176,6 +1200,19 @@ def _token_window_index(now: datetime, account_count: int) -> int:
     seconds_into_day = now.hour * 3600 + now.minute * 60 + now.second
     window_seconds = 86_400 / account_count
     return min(int(seconds_into_day / window_seconds), account_count - 1)
+
+
+def _session_remaining_seconds(session: FreebuffSession) -> float | None:
+    """Seconds until a session's absolute expiry, or None if unknown."""
+    if not session.expires_at:
+        return None
+    try:
+        expires = datetime.fromisoformat(session.expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return (expires - datetime.now(timezone.utc)).total_seconds()
 
 
 def utc_now_iso() -> str:
