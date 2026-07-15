@@ -28,6 +28,7 @@ class Settings:
     session_id: str = ""
     client_id: str = ""
     ad_providers: tuple[str, ...] = ("gravity", "carbon")
+    ad_refresh_seconds: float = 60.0
     request_timeout: float = 60.0
     debug: bool = False
     log_level: str = "INFO"
@@ -136,6 +137,7 @@ def load_settings() -> Settings:
         session_id=os.getenv("FREEBUFF_SESSION_ID", str(uuid.uuid4())),
         client_id=os.getenv("FREEBUFF_CLIENT_ID", uuid.uuid4().hex[:11]),
         ad_providers=_csv("FREEBUFF_AD_PROVIDERS", "gravity,carbon"),
+        ad_refresh_seconds=float(os.getenv("FREEBUFF_AD_REFRESH_SECONDS", "60")),
         request_timeout=float(os.getenv("FREEBUFF_TIMEOUT", "60")),
         debug=debug,
         log_level=log_level,

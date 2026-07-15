@@ -69,6 +69,9 @@ class RetryClient(CodebuffClient):
     async def request_ad_chain(self, messages=None, surface=None) -> None:
         return None
 
+    def schedule_ad_chain(self, messages=None) -> None:
+        return None
+
     async def start_run(self, agent_id, ancestor_run_ids=None) -> str:
         return f"run-{self.settings.token_index}-{agent_id}"
 

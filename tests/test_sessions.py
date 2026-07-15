@@ -282,16 +282,19 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(session.instance_id, "kimi-instance")
         self.assertEqual(session.model, "moonshotai/kimi-k2.7-code")
+        # session creation no longer blocks on ads -- they fire in the
+        # background, so the switch-then-create path runs straight through
         self.assertEqual(
             client.calls,
             [
                 ("get_session", None),
                 ("delete_session",),
-                ("request_ads", "gravity", [], "waiting_room"),
-                ("request_ads", "carbon", [], "waiting_room"),
                 ("create_session", "moonshotai/kimi-k2.7-code"),
             ],
         )
+        # the waiting-room ad still fires, just off the hot path
+        await asyncio.sleep(0.05)
+        self.assertIn(("request_ads", "gravity", [], "waiting_room"), client.calls)
 
     async def test_session_lease_blocks_model_switch_until_chat_releases(self):
         client = LeaseSwitchModelClient()

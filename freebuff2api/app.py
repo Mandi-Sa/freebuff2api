@@ -187,7 +187,7 @@ async def _prepare_chat_attempt(
         )
         client = lease.client
         stage = "run_setup"
-        await client.request_ad_chain(messages=messages)
+        client.schedule_ad_chain(messages)
         await client.validate_agents()
         run = await _start_freebuff_run_chain(client, model_config)
         trace_session_id = str(uuid.uuid4())

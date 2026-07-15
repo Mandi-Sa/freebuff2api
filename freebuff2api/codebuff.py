@@ -104,6 +104,7 @@ class CodebuffClient:
         )
         self._agents_validated = False
         self._validate_lock = asyncio.Lock()
+        self._last_ad_at: float | None = None  # monotonic; ad-chain throttle
 
     def _record_quota(self, data: dict[str, Any]) -> None:
         store = self.quota_store
@@ -375,6 +376,35 @@ class CodebuffClient:
                 json_body=True,
                 user_agent=FREEBUFF_CLI_USER_AGENT,
             ),
+        )
+
+    def schedule_ad_chain(
+        self,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Fire the ad chain in the background so it never blocks first-token.
+
+        Ads are UI/telemetry only -- the chat never reads the result -- and the
+        official CLI fetches them on a background ~60s timer, not on the send
+        path. So we run fire-and-forget and throttle to ``ad_refresh_seconds``
+        to mirror that cadence (hammering the ad endpoint every request would
+        look less like a real client, not more).
+        """
+        if not self.settings.ad_providers:
+            return
+        interval = self.settings.ad_refresh_seconds
+        now = time.monotonic()
+        if (
+            interval > 0
+            and self._last_ad_at is not None
+            and (now - self._last_ad_at) < interval
+        ):
+            return
+        self._last_ad_at = now
+        _spawn_background(
+            self.request_ad_chain(messages=messages),
+            label="ad_chain",
+            debug=self.settings.debug,
         )
 
     async def request_ad_chain(
@@ -668,7 +698,7 @@ class SessionManager:
         active_session = await self._delete_locked_session(model)
         if active_session:
             return active_session
-        await self._request_ads_and_streak(surface="waiting_room")
+        self._schedule_ads_and_streak(surface="waiting_room")
 
         try:
             session = await self.client.create_session(model)
@@ -681,7 +711,7 @@ class SessionManager:
             )
             await self.client.delete_session()
             self._sessions.clear()
-            await self._request_ads_and_streak(surface="waiting_room")
+            self._schedule_ads_and_streak(surface="waiting_room")
             session = await self.client.create_session(model)
         self._sessions[model] = session
         logger.debug(
@@ -691,6 +721,21 @@ class SessionManager:
             session.remaining_ms,
         )
         return session
+
+    def _schedule_ads_and_streak(self, *, surface: str | None = None) -> None:
+        """Fire the waiting-room ad + streak in the background.
+
+        The official CLI shows the waiting-room ad while a session is being
+        created (concurrently), never gating session creation on it. So we run
+        it fire-and-forget, off the first-token path.
+        """
+        if not self.settings.ad_providers:
+            return
+        _spawn_background(
+            self._request_ads_and_streak(surface=surface),
+            label="ads_streak",
+            debug=self.settings.debug,
+        )
 
     async def _request_ads_and_streak(
         self,
@@ -1200,6 +1245,21 @@ def _token_window_index(now: datetime, account_count: int) -> int:
     seconds_into_day = now.hour * 3600 + now.minute * 60 + now.second
     window_seconds = 86_400 / account_count
     return min(int(seconds_into_day / window_seconds), account_count - 1)
+
+
+def _spawn_background(coro: Any, *, label: str, debug: bool = False) -> None:
+    """Run a coroutine fire-and-forget, logging any unexpected failure."""
+    task = asyncio.create_task(coro)
+
+    def _log(done: asyncio.Task[Any]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("background task %s failed", label, exc_info=debug)
+
+    task.add_done_callback(_log)
 
 
 def _session_remaining_seconds(session: FreebuffSession) -> float | None:

@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -75,6 +76,64 @@ class FailingAdsClient(CodebuffClient):
     async def request_ads(self, provider, messages=None, surface=None):
         self.providers.append(provider)
         raise CodebuffError(f"{provider} unavailable", 502)
+
+
+class AdChainSpyClient(CodebuffClient):
+    def __init__(self, **overrides) -> None:
+        super().__init__(
+            Settings(
+                codebuff_token="token",
+                local_api_key=None,
+                request_timeout=1,
+                **overrides,
+            )
+        )
+        self.ad_calls: list = []
+
+    async def request_ad_chain(self, messages=None, *, surface=None) -> None:
+        self.ad_calls.append(messages)
+
+
+class AdChainSchedulingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_schedule_ad_chain_runs_in_background(self) -> None:
+        client = AdChainSpyClient()
+        try:
+            client.schedule_ad_chain([{"role": "user", "content": "hi"}])
+            # returns immediately without awaiting the ad chain
+            self.assertEqual(client.ad_calls, [])
+            await asyncio.sleep(0.01)
+            self.assertEqual(len(client.ad_calls), 1)
+        finally:
+            await client.aclose()
+
+    async def test_schedule_ad_chain_throttles_within_interval(self) -> None:
+        client = AdChainSpyClient(ad_refresh_seconds=60)
+        try:
+            client.schedule_ad_chain([])
+            client.schedule_ad_chain([])  # within the refresh window -> skipped
+            await asyncio.sleep(0.01)
+            self.assertEqual(len(client.ad_calls), 1)
+        finally:
+            await client.aclose()
+
+    async def test_schedule_ad_chain_fires_again_when_throttle_disabled(self) -> None:
+        client = AdChainSpyClient(ad_refresh_seconds=0)
+        try:
+            client.schedule_ad_chain([])
+            client.schedule_ad_chain([])
+            await asyncio.sleep(0.01)
+            self.assertEqual(len(client.ad_calls), 2)
+        finally:
+            await client.aclose()
+
+    async def test_schedule_ad_chain_noop_when_ads_disabled(self) -> None:
+        client = AdChainSpyClient(ad_providers=())
+        try:
+            client.schedule_ad_chain([])
+            await asyncio.sleep(0.01)
+            self.assertEqual(client.ad_calls, [])
+        finally:
+            await client.aclose()
 
 
 class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
