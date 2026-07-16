@@ -105,6 +105,7 @@ class CodebuffClient:
         self._agents_validated = False
         self._validate_lock = asyncio.Lock()
         self._last_ad_at: float | None = None  # monotonic; ad-chain throttle
+        self.owner_name: str | None = None  # account display name, learned from responses
 
     def _record_quota(self, data: dict[str, Any]) -> None:
         store = self.quota_store
@@ -129,6 +130,23 @@ class CodebuffClient:
             limit=entry.get("limit"),
             reset_at=entry.get("resetAt"),
         )
+
+    def _note_owner(self, data: dict[str, Any]) -> None:
+        """Learn the account display name from a session response's referral.
+
+        ``referral.referrerName`` rides the landing/"none" session response;
+        we cache it on the client and log it once so a masked token can be tied
+        to an actual account instead of just ``***760d``.
+        """
+        if not isinstance(data, dict):
+            return
+        referral = data.get("referral")
+        name = referral.get("referrerName") if isinstance(referral, dict) else None
+        if name and name != self.owner_name:
+            self.owner_name = name
+            logger.info(
+                "freebuff token=%s owner=%s", self.settings.token_hint, name
+            )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -248,6 +266,7 @@ class CodebuffClient:
             headers=self._headers(extra=headers_extra),
         )
         self._record_quota(data)
+        self._note_owner(data)
         return data
 
     def _premium_quota_error(self, cause: CodebuffError) -> CodebuffError:
@@ -277,6 +296,7 @@ class CodebuffClient:
                 raise self._premium_quota_error(error) from error
             raise
         self._record_quota(data)
+        self._note_owner(data)
         if data.get("status") == "queued":
             return await self._wait_for_active_session(data, model)
         return self._session_from_data(data, model)
@@ -1063,18 +1083,22 @@ class CodebuffAccountPool:
 
     def _log_account_selected(self, account_index: int, model: str) -> None:
         active_index = self._active_index or 0
-        client_settings = self._accounts[account_index].client.settings
+        client = self._accounts[account_index].client
+        client_settings = client.settings
+        owner = client.owner_name or "?"
         if account_index == active_index:
             logger.info(
-                "using freebuff token=%s model=%s",
+                "using freebuff token=%s owner=%s model=%s",
                 client_settings.token_hint,
+                owner,
                 model,
             )
             return
         active_settings = self._accounts[active_index].client.settings
         logger.info(
-            "using fallback freebuff token=%s (current window token_index=%s unavailable) model=%s",
+            "using fallback freebuff token=%s owner=%s (current window token_index=%s unavailable) model=%s",
             client_settings.token_hint,
+            owner,
             active_settings.token_index,
             model,
         )

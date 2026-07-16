@@ -136,6 +136,36 @@ class AdChainSchedulingTests(unittest.IsolatedAsyncioTestCase):
             await client.aclose()
 
 
+class OwnerNameTests(unittest.IsolatedAsyncioTestCase):
+    def _client(self) -> CodebuffClient:
+        return CodebuffClient(
+            Settings(codebuff_token="tok", local_api_key=None, request_timeout=1)
+        )
+
+    async def test_note_owner_captures_referrer_name(self) -> None:
+        client = self._client()
+        try:
+            with self.assertLogs("freebuff2api.codebuff", level="INFO") as logs:
+                client._note_owner(
+                    {"status": "none", "referral": {"referrerName": "阿菌•未霜"}}
+                )
+            self.assertEqual(client.owner_name, "阿菌•未霜")
+            self.assertTrue(any("owner=阿菌•未霜" in line for line in logs.output))
+            # a later response without referral keeps the learned name
+            client._note_owner({"status": "active", "instanceId": "x"})
+            self.assertEqual(client.owner_name, "阿菌•未霜")
+        finally:
+            await client.aclose()
+
+    async def test_note_owner_ignores_missing_referral(self) -> None:
+        client = self._client()
+        try:
+            client._note_owner({"status": "active", "instanceId": "x"})
+            self.assertIsNone(client.owner_name)
+        finally:
+            await client.aclose()
+
+
 class CodebuffClientTests(unittest.IsolatedAsyncioTestCase):
     def test_client_uses_explicit_proxy_only_when_enabled(self) -> None:
         captured = {}

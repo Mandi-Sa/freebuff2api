@@ -115,6 +115,7 @@ class PoolClient:
         self.settings = settings
         self.quota_store = quota_store
         self.closed = False
+        self.owner_name = None
 
     async def aclose(self) -> None:
         self.closed = True
