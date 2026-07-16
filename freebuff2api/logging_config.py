@@ -83,6 +83,13 @@ class ColorFormatter(logging.Formatter):
 
 
 def configure_logging(settings: Settings) -> None:
+    # Non-ASCII log content (e.g. account display names) must not crash logging
+    # on a non-UTF-8 console (Windows codepage); force UTF-8 on the stream and
+    # degrade any unencodable char instead of raising a UnicodeEncodeError.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
     handler = logging.StreamHandler(sys.stdout)
     formatter_cls = ColorFormatter if settings.log_color else logging.Formatter
     handler.setFormatter(formatter_cls(LOG_FORMAT, datefmt=DATE_FORMAT))
